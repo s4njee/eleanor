@@ -1,0 +1,758 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Eleanor — neon drive</title>
+<style>
+  :root{
+    --ui-text:#e9b6ff;
+    --ui-accent:#ff5cf0;
+    --speed-color:#5cf0ff;
+    --edge-color:#00eaff;
+    --center-color:#ff2bd6;
+  }
+  html,body{margin:0;height:100%;overflow:hidden;background:#06010f;font-family:system-ui,sans-serif}
+  #c{display:block;width:100%;height:100%}
+  #hud{position:fixed;left:20px;bottom:20px;color:var(--ui-text);text-shadow:0 0 8px var(--ui-accent);
+       font-size:14px;line-height:1.5;pointer-events:none;user-select:none}
+  #hud b{font-size:16px;color:var(--ui-accent)}
+  #speed{position:fixed;right:20px;bottom:20px;color:var(--speed-color);font-variant-numeric:tabular-nums;
+         text-shadow:0 0 8px var(--edge-color);font-size:13px}
+  #load{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
+        color:var(--ui-text);font-size:18px;background:#06010f;transition:opacity .5s;
+        text-shadow:0 0 10px var(--ui-accent)}
+  #themeSwitch{
+    position:fixed;top:18px;left:50%;transform:translateX(-50%);
+    display:flex;gap:6px;padding:6px;z-index:5;
+    border:1px solid rgba(255,255,255,.14);border-radius:8px;
+    background:rgba(4,3,12,.46);box-shadow:0 16px 48px rgba(0,0,0,.32);
+    backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+  }
+  .theme-btn{
+    appearance:none;border:1px solid rgba(255,255,255,.14);border-radius:6px;
+    background:rgba(255,255,255,.06);color:var(--ui-text);height:34px;
+    padding:0 10px;display:flex;align-items:center;gap:7px;
+    font:600 12px/1 system-ui,sans-serif;letter-spacing:0;cursor:pointer;
+    transition:border-color .2s ease,box-shadow .2s ease,background .2s ease,color .2s ease;
+  }
+  .theme-btn:hover{background:rgba(255,255,255,.1)}
+  .theme-btn[aria-selected="true"]{
+    color:#fff;border-color:var(--edge-color);background:rgba(255,255,255,.13);
+    box-shadow:0 0 18px rgba(255,255,255,.12),0 0 22px var(--center-color);
+  }
+  .theme-swatch{
+    width:18px;height:18px;border-radius:50%;flex:0 0 auto;
+    background:linear-gradient(135deg,var(--swatch-a),var(--swatch-b));
+    box-shadow:0 0 10px var(--swatch-a),0 0 10px var(--swatch-b);
+  }
+  @media (max-width:680px){
+    #themeSwitch{top:12px;left:12px;right:12px;transform:none;display:grid;grid-template-columns:repeat(4,minmax(0,1fr))}
+    .theme-btn{padding:0 8px;justify-content:center}
+    .theme-label{display:none}
+    .theme-swatch{width:20px;height:20px}
+    #hud{left:14px;bottom:16px;font-size:12px}
+    #hud b{font-size:14px}
+    #speed{right:14px;bottom:16px}
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="themeSwitch" role="listbox" aria-label="Color scheme"></div>
+<div id="hud"><b>Hold SPACE to drive</b><br>← / → steer · drag to orbit · scroll to zoom</div>
+<div id="speed">0 km/h</div>
+<div id="load">Loading Eleanor…</div>
+
+<script type="importmap">
+{ "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+}}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+
+// ---- tunables -----------------------------------------------------------
+const WHEEL_RADIUS = 0.325;   // metres (from the Blender rig)
+const MAX_SPEED    = 28;      // m/s top speed
+const ACCEL        = 22;      // m/s^2 while SPACE held
+const DECEL        = 38;      // m/s^2 when released -> stop
+const STRIPE_INNER = 0.05, STRIPE_OUTER = 0.27;  // centreline stripes
+const SPIN_SIGN    = -1;      // wheel roll direction (flip if it looks wrong)
+const SCROLL_SIGN  =  1;      // road-line direction (flip if it looks wrong)
+const ROAD_LEN = 4000, ROAD_REPEAT = 140;
+const UNITS_PER_V = ROAD_LEN / ROAD_REPEAT;
+const ROAD_WIDTH = 9;
+const LINE_INNER_U = 24 / 256; // inner edge of the solid roadside lines in the road texture
+const ROAD_INNER_HALF = (0.5 - LINE_INNER_U) * ROAD_WIDTH;
+const STEER_ACCEL = 15.5;
+const STEER_DAMPING = 6.7;
+const STEER_MAX_SPEED = 5.8;
+const STEER_VISUAL_YAW = 0.16;
+const STEER_VISUAL_ROLL = 0.055;
+// car nose points -Z; the road scrolls toward +Z to fake forward motion
+// -------------------------------------------------------------------------
+
+const THEMES = {
+  midnight: {
+    key:'midnight', label:'Midnight', title:'Midnight Magenta', seed:57, skySeed:101,
+    edge:'#00eaff', edgeSoft:'#8ef9ff', center:'#ff2bd6', centerSoft:'#ff79e7',
+    edgeRgb:'0,234,255', centerRgb:'255,43,214',
+    uiText:'#e9b6ff', uiAccent:'#ff5cf0', speedColor:'#5cf0ff',
+    fog:'#0a0518', ground:'#080214',
+    skyStops:['#06030f','#0a0518','#040209'],
+    skyClouds:[[58,13,110],[96,24,168],[158,31,176],[205,28,140],[40,80,200],[22,168,200]],
+    skyCore:['rgba(255,214,246,0.5)','rgba(224,120,212,0.3)','rgba(120,44,168,0.13)','rgba(40,12,70,0)'],
+    hemiSky:'#6a1aff', hemiGround:'#1a0033', keyLight:'#ff36c6', rimLight:'#21e9ff', fillLight:'#b24bff',
+    bloom:{strength:0.62, radius:0.58, threshold:0.88},
+    roadEmissive:1.45, sheenOpacity:0.52
+  },
+  cyan: {
+    key:'cyan', label:'Cyan', title:'Cyan Rain', seed:131, skySeed:211,
+    edge:'#00ffe1', edgeSoft:'#b7fff6', center:'#6c8cff', centerSoft:'#a9baff',
+    edgeRgb:'0,255,225', centerRgb:'108,140,255',
+    uiText:'#ccfff8', uiAccent:'#52ffe8', speedColor:'#a9baff',
+    fog:'#03161b', ground:'#031016',
+    skyStops:['#021015','#06212d','#02070b'],
+    skyClouds:[[0,76,98],[0,138,148],[39,91,188],[86,120,255],[52,225,210],[136,82,255]],
+    skyCore:['rgba(212,255,250,0.38)','rgba(72,240,226,0.26)','rgba(50,95,210,0.16)','rgba(2,28,42,0)'],
+    hemiSky:'#1ddfd4', hemiGround:'#03133d', keyLight:'#4effe3', rimLight:'#7b8cff', fillLight:'#38d8ff',
+    bloom:{strength:0.68, radius:0.6, threshold:0.86},
+    roadEmissive:1.5, sheenOpacity:0.5
+  },
+  amber: {
+    key:'amber', label:'Amber', title:'Amber Tunnel', seed:293, skySeed:337,
+    edge:'#ffb000', edgeSoft:'#ffe29a', center:'#00d7ff', centerSoft:'#91f4ff',
+    edgeRgb:'255,176,0', centerRgb:'0,215,255',
+    uiText:'#ffe5b3', uiAccent:'#ffb000', speedColor:'#7defff',
+    fog:'#180d05', ground:'#0f0806',
+    skyStops:['#120806','#1d1208','#050407'],
+    skyClouds:[[128,42,10],[226,92,20],[255,176,0],[0,108,150],[0,197,255],[130,44,146]],
+    skyCore:['rgba(255,224,170,0.42)','rgba(255,146,56,0.26)','rgba(0,170,230,0.12)','rgba(40,12,4,0)'],
+    hemiSky:'#ff9f1c', hemiGround:'#200814', keyLight:'#ffb000', rimLight:'#00d7ff', fillLight:'#ff4d9d',
+    bloom:{strength:0.58, radius:0.56, threshold:0.9},
+    roadEmissive:1.38, sheenOpacity:0.48
+  },
+  ghost: {
+    key:'ghost', label:'Ghost', title:'Ghost Chrome', seed:419, skySeed:503,
+    edge:'#f4fbff', edgeSoft:'#ffffff', center:'#a06cff', centerSoft:'#d7c5ff',
+    edgeRgb:'244,251,255', centerRgb:'160,108,255',
+    uiText:'#edf6ff', uiAccent:'#cbb8ff', speedColor:'#f4fbff',
+    fog:'#080b12', ground:'#090b10',
+    skyStops:['#080910','#111522','#040508'],
+    skyClouds:[[95,100,118],[156,165,188],[58,86,130],[160,108,255],[38,210,230],[222,226,238]],
+    skyCore:['rgba(255,255,255,0.38)','rgba(186,196,226,0.28)','rgba(138,104,255,0.14)','rgba(10,12,20,0)'],
+    hemiSky:'#dfeaff', hemiGround:'#171229', keyLight:'#f4fbff', rimLight:'#a06cff', fillLight:'#75e8ff',
+    bloom:{strength:0.52, radius:0.5, threshold:0.9},
+    roadEmissive:1.28, sheenOpacity:0.45
+  }
+};
+
+const savedTheme = localStorage.getItem('eleanor-theme');
+let activeThemeKey = THEMES[savedTheme] ? savedTheme : 'midnight';
+let activeTheme = THEMES[activeThemeKey];
+
+const renderer = new THREE.WebGLRenderer({canvas:document.getElementById('c'), antialias:true});
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.15;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+const scene = new THREE.Scene();
+scene.fog = new THREE.FogExp2(activeTheme.fog, 0.012);
+
+const camera = new THREE.PerspectiveCamera(55, innerWidth/innerHeight, 0.1, 1000);
+camera.position.set(6.5, 3, 9);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 0.7, 0);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.minDistance = 3;
+controls.maxDistance = 40;
+controls.maxPolarAngle = Math.PI * 0.495;
+controls.update();
+
+// ---- neon environment (gradient sky -> reflections + background) ----------
+function neonSky(theme){
+  const W=4096, H=2048;
+  const rnd = seededRandom(theme.skySeed);
+  const c=document.createElement('canvas'); c.width=W; c.height=H;
+  const x=c.getContext('2d');
+
+  // deep-space base
+  const base=x.createLinearGradient(0,0,0,H);
+  base.addColorStop(0.0, theme.skyStops[0]);
+  base.addColorStop(0.5, theme.skyStops[1]);
+  base.addColorStop(1.0, theme.skyStops[2]);
+  x.fillStyle=base; x.fillRect(0,0,W,H);
+
+  // radial blob drawn 3x (wrapped) so it never seams at the u=0/1 edge
+  function blob(cx,cy,r,stops){
+    for(const dx of [-W,0,W]){
+      const g=x.createRadialGradient(cx+dx,cy,0,cx+dx,cy,r);
+      for(const st of stops) g.addColorStop(st[0],st[1]);
+      x.fillStyle=g; x.beginPath(); x.arc(cx+dx,cy,r,0,7); x.fill();
+    }
+  }
+
+  // nebula clouds (additive)
+  x.globalCompositeOperation='lighter';
+  const pal=theme.skyClouds;
+  for(let i=0;i<40;i++){
+    const cx=rnd()*W, cy=rnd()*H*0.92;
+    const r=240+rnd()*840;
+    const p=pal[(rnd()*pal.length)|0];
+    const a=0.09+rnd()*0.19;
+    blob(cx,cy,r,[[0,`rgba(${p[0]},${p[1]},${p[2]},${a})`],
+                  [1,`rgba(${p[0]},${p[1]},${p[2]},0)`]]);
+  }
+
+  // bright galactic core
+  blob(W*0.6, H*0.38, 1000, [
+    [0.00, theme.skyCore[0]],
+    [0.22, theme.skyCore[1]],
+    [0.55, theme.skyCore[2]],
+    [1.00, theme.skyCore[3]]]);
+
+  // star field - small (most are sub-pixel in this 4096px map)
+  for(let i=0;i<3000;i++){
+    const sx=rnd()*W, sy=rnd()*H;
+    const big=rnd()<0.10;
+    const r=big ? 0.9+rnd()*0.9 : 0.35+rnd()*0.55;
+    const b=0.4+rnd()*0.55;
+    const t=rnd();
+    const col = t<0.72 ? `rgba(255,255,255,${b})`
+              : t<0.87 ? `rgba(188,210,255,${b})`
+                       : `rgba(255,196,236,${b})`;
+    x.fillStyle=col; x.beginPath(); x.arc(sx,sy,r,0,7); x.fill();
+  }
+  // a few bright stars with small glow halos (catch the bloom), wrapped
+  for(let i=0;i<38;i++){
+    const sx=rnd()*W, sy=rnd()*H*0.85;
+    const r=0.9+rnd()*1.1;
+    blob(sx,sy,r*3.0,[[0,'rgba(255,255,255,0.9)'],
+                      [0.32,'rgba(216,232,255,0.4)'],
+                      [1,'rgba(255,255,255,0)']]);
+    x.fillStyle='rgba(255,255,255,0.95)'; x.beginPath(); x.arc(sx,sy,r,0,7); x.fill();
+  }
+  x.globalCompositeOperation='source-over';
+
+  const t=new THREE.CanvasTexture(c);
+  t.mapping=THREE.EquirectangularReflectionMapping;
+  t.colorSpace=THREE.SRGBColorSpace;
+  t.anisotropy=8;
+  return t;
+}
+const pmrem = new THREE.PMREMGenerator(renderer);
+let skyTex = null;
+let skyEnvTex = null;
+function setSkyTheme(theme){
+  if(skyTex) skyTex.dispose();
+  if(skyEnvTex) skyEnvTex.dispose();
+  skyTex = neonSky(theme);
+  skyEnvTex = pmrem.fromEquirectangular(skyTex).texture;
+  scene.environment = skyEnvTex;
+  scene.background = skyTex;
+  scene.fog.color.set(theme.fog);
+}
+setSkyTheme(activeTheme);
+
+// neutral grey environment used ONLY for the car paint, so it reflects
+// greys instead of the neon sky (keeps Eleanor grey & black)
+function greySky(){
+  const c=document.createElement('canvas'); c.width=512; c.height=256;
+  const x=c.getContext('2d');
+  const g=x.createLinearGradient(0,0,0,256);
+  g.addColorStop(0.00,'#b8bcc2');   // bright grey sky
+  g.addColorStop(0.50,'#5e636b');
+  g.addColorStop(0.52,'#3a3e45');
+  g.addColorStop(1.00,'#15171b');   // dark grey ground
+  x.fillStyle=g; x.fillRect(0,0,512,256);
+  const t=new THREE.CanvasTexture(c);
+  t.mapping=THREE.EquirectangularReflectionMapping; t.colorSpace=THREE.SRGBColorSpace;
+  return t;
+}
+const greyEnvTex = pmrem.fromEquirectangular(greySky()).texture;
+
+// ---- neon lighting ------------------------------------------------------
+const hemi = new THREE.HemisphereLight(activeTheme.hemiSky, activeTheme.hemiGround, 0.6);
+scene.add(hemi);
+// colored key (casts shadow)
+const key = new THREE.DirectionalLight(activeTheme.keyLight, 3.0);
+key.position.set(-26, 40, 18);
+key.castShadow = true;
+key.shadow.mapSize.set(1024,1024);
+const s = 18;
+key.shadow.camera.left=-s; key.shadow.camera.right=s;
+key.shadow.camera.top=s; key.shadow.camera.bottom=-s;
+key.shadow.camera.near=1; key.shadow.camera.far=140; key.shadow.bias=-0.0004;
+scene.add(key);
+// rim from the opposite side
+const rim = new THREE.DirectionalLight(activeTheme.rimLight, 2.2);
+rim.position.set(24, 14, -22);
+scene.add(rim);
+// point fill near the car for glossy pops
+const fill = new THREE.PointLight(activeTheme.fillLight, 40, 40, 2.0);
+fill.position.set(0, 5, 6);
+scene.add(fill);
+
+// ---- ground + wet neon road ---------------------------------------------
+const ground = new THREE.Mesh(
+  new THREE.PlaneGeometry(2000, 2000),
+  new THREE.MeshStandardMaterial({color:activeTheme.ground, roughness:0.62, metalness:0.06})
+);
+ground.rotation.x = -Math.PI/2; ground.position.y = -0.01; ground.receiveShadow = true;
+scene.add(ground);
+
+function seededRandom(seed=1337){
+  return ()=>{
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    return seed / 4294967296;
+  };
+}
+
+function configureRoadTexture(texture, colorTexture=false){
+  texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+  texture.repeat.set(1, ROAD_REPEAT);
+  texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  if(colorTexture) texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+function fillGlowRect(ctx, x, y, w, h, color, blur, alpha=1){
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.shadowColor = color;
+  ctx.shadowBlur = blur;
+  ctx.fillStyle = color;
+  ctx.fillRect(x, y, w, h);
+  ctx.restore();
+}
+
+function roundedRect(ctx, x, y, w, h, r){
+  ctx.beginPath();
+  ctx.moveTo(x+r, y);
+  ctx.lineTo(x+w-r, y);
+  ctx.quadraticCurveTo(x+w, y, x+w, y+r);
+  ctx.lineTo(x+w, y+h-r);
+  ctx.quadraticCurveTo(x+w, y+h, x+w-r, y+h);
+  ctx.lineTo(x+r, y+h);
+  ctx.quadraticCurveTo(x, y+h, x, y+h-r);
+  ctx.lineTo(x, y+r);
+  ctx.quadraticCurveTo(x, y, x+r, y);
+  ctx.closePath();
+}
+
+function roadTextureSet(theme){
+  const W = 256, H = 1024;
+  const rnd = seededRandom(theme.seed);
+  const make = ()=>{ const c=document.createElement('canvas'); c.width=W; c.height=H; return c; };
+
+  const base = make(), b = base.getContext('2d');
+  const asphalt = b.createLinearGradient(0,0,W,0);
+  asphalt.addColorStop(0.00,'#03030a');
+  asphalt.addColorStop(0.18,'#080915');
+  asphalt.addColorStop(0.50,'#101020');
+  asphalt.addColorStop(0.82,'#080915');
+  asphalt.addColorStop(1.00,'#03030a');
+  b.fillStyle = asphalt;
+  b.fillRect(0,0,W,H);
+
+  for(let i=0;i<9000;i++){
+    const v = 11 + rnd()*34;
+    const a = 0.025 + rnd()*0.085;
+    b.fillStyle = `rgba(${v},${v+2},${v+8},${a})`;
+    b.fillRect(rnd()*W, rnd()*H, 0.6+rnd()*1.8, 0.6+rnd()*2.2);
+  }
+
+  b.globalCompositeOperation = 'screen';
+  b.filter = 'blur(7px)';
+  for(let i=0;i<36;i++){
+    const px = 34 + rnd()*188;
+    const py = rnd()*H;
+    const pw = 18 + rnd()*62;
+    const ph = 36 + rnd()*140;
+    const hue = rnd() > 0.5 ? theme.edgeRgb : theme.centerRgb;
+    const g = b.createLinearGradient(px, py, px+pw, py+ph);
+    g.addColorStop(0, `rgba(${hue},0)`);
+    g.addColorStop(0.48, `rgba(${hue},${0.035+rnd()*0.09})`);
+    g.addColorStop(1, `rgba(${hue},0)`);
+    b.fillStyle = g;
+    roundedRect(b, px, py, pw, ph, 24);
+    b.fill();
+  }
+  b.filter = 'none';
+  b.globalCompositeOperation = 'source-over';
+
+  fillGlowRect(b, 20, 0, 4, H, theme.edge, 18, 0.9);
+  fillGlowRect(b, W-24, 0, 4, H, theme.edge, 18, 0.9);
+  fillGlowRect(b, 32, 0, 2, H, theme.edgeSoft, 8, 0.36);
+  fillGlowRect(b, W-34, 0, 2, H, theme.edgeSoft, 8, 0.36);
+  for(let y=22;y<H;y+=142){
+    fillGlowRect(b, W/2-4, y, 8, 78, theme.center, 18, 0.95);
+    fillGlowRect(b, W/2-18, y+18, 36, 26, theme.centerSoft, 28, 0.16);
+  }
+
+  const glow = make(), g = glow.getContext('2d');
+  g.fillStyle = '#000';
+  g.fillRect(0,0,W,H);
+  fillGlowRect(g, 19, 0, 7, H, theme.edge, 28, 1.0);
+  fillGlowRect(g, W-26, 0, 7, H, theme.edge, 28, 1.0);
+  fillGlowRect(g, 31, 0, 2, H, theme.edgeSoft, 18, 0.45);
+  fillGlowRect(g, W-33, 0, 2, H, theme.edgeSoft, 18, 0.45);
+  for(let y=22;y<H;y+=142){
+    fillGlowRect(g, W/2-5, y, 10, 78, theme.center, 26, 1.0);
+    fillGlowRect(g, W/2-24, y+14, 48, 36, theme.center, 40, 0.22);
+  }
+  g.globalCompositeOperation = 'screen';
+  g.filter = 'blur(10px)';
+  for(let i=0;i<32;i++){
+    const color = rnd() > 0.45 ? theme.edgeRgb : theme.centerRgb;
+    const x = 40 + rnd()*176;
+    const y = rnd()*H;
+    const w = 10 + rnd()*46;
+    const h = 80 + rnd()*220;
+    const grad = g.createLinearGradient(x, y, x, y+h);
+    grad.addColorStop(0, `rgba(${color},0)`);
+    grad.addColorStop(0.45, `rgba(${color},${0.07+rnd()*0.12})`);
+    grad.addColorStop(1, `rgba(${color},0)`);
+    g.fillStyle = grad;
+    roundedRect(g, x, y, w, h, 18);
+    g.fill();
+  }
+  g.filter = 'none';
+  g.globalCompositeOperation = 'source-over';
+
+  const roughness = make(), r = roughness.getContext('2d');
+  r.fillStyle = '#8f8f8f';
+  r.fillRect(0,0,W,H);
+  for(let i=0;i<4200;i++){
+    const shade = 72 + rnd()*92;
+    r.fillStyle = `rgb(${shade},${shade},${shade})`;
+    r.fillRect(rnd()*W, rnd()*H, 1+rnd()*4, 1+rnd()*6);
+  }
+  for(let i=0;i<48;i++){
+    const shade = 24 + rnd()*24;
+    r.fillStyle = `rgb(${shade},${shade},${shade})`;
+    roundedRect(r, 26+rnd()*190, rnd()*H, 16+rnd()*70, 34+rnd()*130, 22);
+    r.fill();
+  }
+
+  const bump = make(), h = bump.getContext('2d');
+  h.fillStyle = '#777';
+  h.fillRect(0,0,W,H);
+  for(let i=0;i<11000;i++){
+    const shade = 82 + rnd()*92;
+    h.fillStyle = `rgb(${shade},${shade},${shade})`;
+    h.fillRect(rnd()*W, rnd()*H, 0.8+rnd()*1.8, 0.8+rnd()*2.4);
+  }
+  h.globalAlpha = 0.22;
+  h.strokeStyle = '#d6d6d6';
+  for(let y=0;y<H;y+=96){
+    h.beginPath();
+    h.moveTo(0, y+rnd()*18);
+    h.bezierCurveTo(W*0.3, y+12+rnd()*18, W*0.7, y-8+rnd()*20, W, y+8+rnd()*18);
+    h.stroke();
+  }
+  h.globalAlpha = 1;
+
+  const sheen = make(), sctx = sheen.getContext('2d');
+  sctx.clearRect(0,0,W,H);
+  sctx.globalCompositeOperation = 'screen';
+  sctx.filter = 'blur(12px)';
+  for(let i=0;i<46;i++){
+    const color = rnd() > 0.52 ? theme.edgeRgb : theme.centerRgb;
+    const x = 26 + rnd()*204;
+    const y = rnd()*H;
+    const w = 14 + rnd()*86;
+    const hgt = 48 + rnd()*190;
+    const grad = sctx.createLinearGradient(x, y, x+w, y+hgt);
+    grad.addColorStop(0, `rgba(${color},0)`);
+    grad.addColorStop(0.45, `rgba(${color},${0.12+rnd()*0.2})`);
+    grad.addColorStop(1, `rgba(${color},0)`);
+    sctx.fillStyle = grad;
+    roundedRect(sctx, x, y, w, hgt, 26);
+    sctx.fill();
+  }
+  sctx.filter = 'none';
+  for(let y=12;y<H;y+=142){
+    fillGlowRect(sctx, W/2-30, y+48, 60, 18, theme.centerSoft, 32, 0.28);
+  }
+  sctx.globalCompositeOperation = 'source-over';
+
+  return {
+    base: configureRoadTexture(new THREE.CanvasTexture(base), true),
+    glow: configureRoadTexture(new THREE.CanvasTexture(glow), true),
+    roughness: configureRoadTexture(new THREE.CanvasTexture(roughness)),
+    bump: configureRoadTexture(new THREE.CanvasTexture(bump)),
+    sheen: configureRoadTexture(new THREE.CanvasTexture(sheen), true)
+  };
+}
+
+let roadMaps = roadTextureSet(activeTheme);
+let roadScrollMaps = [roadMaps.base, roadMaps.glow, roadMaps.roughness, roadMaps.bump];
+const road = new THREE.Mesh(
+  new THREE.PlaneGeometry(9, ROAD_LEN),
+  new THREE.MeshPhysicalMaterial({
+    map: roadMaps.base,
+    emissiveMap: roadMaps.glow,
+    roughnessMap: roadMaps.roughness,
+    bumpMap: roadMaps.bump,
+    color: 0xffffff,
+    emissive: 0xffffff,
+    emissiveIntensity: activeTheme.roadEmissive,
+    roughness: 0.38,
+    metalness: 0.08,
+    clearcoat: 1.0,
+    clearcoatRoughness: 0.12,
+    envMapIntensity: 1.25,
+    bumpScale: 0.045
+  })
+);
+road.rotation.x = -Math.PI/2; road.receiveShadow = true;
+scene.add(road);
+
+const roadSheen = new THREE.Mesh(
+  new THREE.PlaneGeometry(9.35, ROAD_LEN),
+  new THREE.MeshBasicMaterial({
+    map: roadMaps.sheen,
+    transparent: true,
+    opacity: activeTheme.sheenOpacity,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    toneMapped: false
+  })
+);
+roadSheen.rotation.x = -Math.PI/2;
+roadSheen.position.y = 0.014;
+roadSheen.renderOrder = 2;
+scene.add(roadSheen);
+
+// ---- car ----------------------------------------------------------------
+const carGroup = new THREE.Group();
+scene.add(carGroup);
+const wheels = [];
+let steerLeft = false, steerRight = false;
+let lateralSpeed = 0;
+let lateralLimit = 2.25;
+
+const bodyMat = new THREE.MeshStandardMaterial({
+  vertexColors:true, metalness:0.85, roughness:0.3,
+  envMap:greyEnvTex, envMapIntensity:1.0   // grey reflections, not neon
+});
+
+function applyStripes(mesh){
+  const g = mesh.geometry, pos = g.attributes.position, nor = g.attributes.normal;
+  const mw = mesh.matrixWorld;
+  const nmat = new THREE.Matrix3().getNormalMatrix(mw);
+  const col = new Float32Array(pos.count*3);
+  const v = new THREE.Vector3(), n = new THREE.Vector3();
+  const silver = new THREE.Color(0.34,0.34,0.37), black = new THREE.Color(0.012,0.012,0.012);
+  for(let i=0;i<pos.count;i++){
+    v.fromBufferAttribute(pos,i).applyMatrix4(mw);
+    n.fromBufferAttribute(nor,i).applyMatrix3(nmat).normalize();
+    const ax = Math.abs(v.x);
+    const c = (ax>STRIPE_INNER && ax<STRIPE_OUTER && n.y>0.35) ? black : silver;
+    col[i*3]=c.r; col[i*3+1]=c.g; col[i*3+2]=c.b;
+  }
+  g.setAttribute('color', new THREE.BufferAttribute(col,3));
+  mesh.material = bodyMat;
+}
+
+const gltfLoader = new GLTFLoader();
+const dracoLoader = new DRACOLoader();
+dracoLoader.setDecoderPath('https://www.gstatic.com/draco/v1/decoders/');
+gltfLoader.setDRACOLoader(dracoLoader);
+gltfLoader.load('eleanor.glb', (gltf)=>{
+  const root = gltf.scene;
+  carGroup.add(root);
+  carGroup.updateWorldMatrix(true,true);
+  const box = new THREE.Box3().setFromObject(root);
+  const ctr = box.getCenter(new THREE.Vector3());
+  const modelHalfWidth = (box.max.x - box.min.x) * 0.5;
+  const modelHalfLength = (box.max.z - box.min.z) * 0.5;
+  root.position.x -= ctr.x; root.position.z -= ctr.z; root.position.y -= box.min.y;
+  carGroup.updateWorldMatrix(true,true);
+  const yawClearance = Math.sin(STEER_VISUAL_YAW) * modelHalfLength;
+  lateralLimit = Math.max(0.4, ROAD_INNER_HALF - modelHalfWidth - yawClearance - 0.18);
+  carGroup.position.x = THREE.MathUtils.clamp(carGroup.position.x, -lateralLimit, lateralLimit);
+
+  root.traverse(o=>{
+    if(o.isMesh){
+      o.castShadow = true; o.frustumCulled = false;
+      if(o.material && o.material.name === 'carpaint') applyStripes(o);
+    }
+    if(o.name && o.name.startsWith('Wheel_') && o.name.endsWith('_ctrl')) wheels.push(o);
+  });
+
+  document.getElementById('load').style.opacity = 0;
+  setTimeout(()=>document.getElementById('load').remove(), 600);
+}, undefined, (err)=>{
+  document.getElementById('load').textContent = 'Failed to load eleanor.glb — run via a local web server.';
+  console.error(err);
+});
+
+// ---- post-processing: neon bloom ---------------------------------------
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+const bloom = new UnrealBloomPass(
+  new THREE.Vector2(innerWidth, innerHeight),
+  activeTheme.bloom.strength,
+  activeTheme.bloom.radius,
+  activeTheme.bloom.threshold
+);
+composer.addPass(bloom);
+composer.addPass(new OutputPass());
+
+// ---- theme switcher -----------------------------------------------------
+function disposeRoadMaps(maps){
+  for(const texture of Object.values(maps)) texture.dispose();
+}
+
+function replaceRoadMaps(theme){
+  const oldMaps = roadMaps;
+  roadMaps = roadTextureSet(theme);
+  roadScrollMaps = [roadMaps.base, roadMaps.glow, roadMaps.roughness, roadMaps.bump];
+  road.material.map = roadMaps.base;
+  road.material.emissiveMap = roadMaps.glow;
+  road.material.roughnessMap = roadMaps.roughness;
+  road.material.bumpMap = roadMaps.bump;
+  roadSheen.material.map = roadMaps.sheen;
+  road.material.needsUpdate = true;
+  roadSheen.material.needsUpdate = true;
+  disposeRoadMaps(oldMaps);
+}
+
+function syncThemeButtons(){
+  document.querySelectorAll('.theme-btn').forEach(button=>{
+    button.setAttribute('aria-selected', String(button.dataset.theme === activeThemeKey));
+  });
+}
+
+function setCssTheme(theme){
+  const root = document.documentElement.style;
+  root.setProperty('--ui-text', theme.uiText);
+  root.setProperty('--ui-accent', theme.uiAccent);
+  root.setProperty('--speed-color', theme.speedColor);
+  root.setProperty('--edge-color', theme.edge);
+  root.setProperty('--center-color', theme.center);
+}
+
+function setTheme(keyName, rebuildRoad=true){
+  if(!THEMES[keyName]) return;
+  activeThemeKey = keyName;
+  activeTheme = THEMES[keyName];
+  localStorage.setItem('eleanor-theme', activeThemeKey);
+  document.body.dataset.theme = activeThemeKey;
+  setCssTheme(activeTheme);
+  setSkyTheme(activeTheme);
+  hemi.color.set(activeTheme.hemiSky);
+  hemi.groundColor.set(activeTheme.hemiGround);
+  key.color.set(activeTheme.keyLight);
+  rim.color.set(activeTheme.rimLight);
+  fill.color.set(activeTheme.fillLight);
+  ground.material.color.set(activeTheme.ground);
+  road.material.emissiveIntensity = activeTheme.roadEmissive;
+  roadSheen.material.opacity = activeTheme.sheenOpacity;
+  bloom.strength = activeTheme.bloom.strength;
+  bloom.radius = activeTheme.bloom.radius;
+  bloom.threshold = activeTheme.bloom.threshold;
+  if(rebuildRoad) replaceRoadMaps(activeTheme);
+  syncThemeButtons();
+}
+
+const themeSwitch = document.getElementById('themeSwitch');
+for(const theme of Object.values(THEMES)){
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'theme-btn';
+  button.dataset.theme = theme.key;
+  button.setAttribute('role', 'option');
+  button.setAttribute('aria-label', theme.title);
+  button.title = theme.title;
+  button.style.setProperty('--swatch-a', theme.edge);
+  button.style.setProperty('--swatch-b', theme.center);
+  button.innerHTML = '<span class="theme-swatch" aria-hidden="true"></span><span class="theme-label"></span>';
+  button.querySelector('.theme-label').textContent = theme.label;
+  button.addEventListener('click', ()=>setTheme(theme.key));
+  themeSwitch.append(button);
+}
+setTheme(activeThemeKey, false);
+
+// ---- controls -----------------------------------------------------------
+let driving = false, speed = 0;
+addEventListener('keydown', e=>{
+  if(e.code==='Space'){ e.preventDefault(); driving=true; }
+  if(e.code==='ArrowLeft'){ e.preventDefault(); steerLeft=true; }
+  if(e.code==='ArrowRight'){ e.preventDefault(); steerRight=true; }
+});
+addEventListener('keyup', e=>{
+  if(e.code==='Space'){ e.preventDefault(); driving=false; }
+  if(e.code==='ArrowLeft'){ e.preventDefault(); steerLeft=false; }
+  if(e.code==='ArrowRight'){ e.preventDefault(); steerRight=false; }
+});
+addEventListener('blur', ()=>{
+  driving=false;
+  steerLeft=false;
+  steerRight=false;
+});
+
+// ---- loop ---------------------------------------------------------------
+const speedEl = document.getElementById('speed');
+const clock = new THREE.Clock();
+function tick(){
+  const dt = Math.min(clock.getDelta(), 0.05);
+  speed += (driving ? ACCEL : -DECEL) * dt;
+  speed = Math.max(0, Math.min(MAX_SPEED, speed));
+
+  const steerInput = (steerRight ? 1 : 0) - (steerLeft ? 1 : 0);
+  const steeringGrip = 0.35 + (speed / MAX_SPEED) * 0.65;
+  lateralSpeed += steerInput * STEER_ACCEL * steeringGrip * dt;
+  lateralSpeed -= lateralSpeed * STEER_DAMPING * dt;
+  lateralSpeed = THREE.MathUtils.clamp(lateralSpeed, -STEER_MAX_SPEED, STEER_MAX_SPEED);
+  carGroup.position.x += lateralSpeed * dt;
+  if(carGroup.position.x < -lateralLimit){
+    carGroup.position.x = -lateralLimit;
+    lateralSpeed = Math.max(0, lateralSpeed);
+  }else if(carGroup.position.x > lateralLimit){
+    carGroup.position.x = lateralLimit;
+    lateralSpeed = Math.min(0, lateralSpeed);
+  }
+  const steerVisual = lateralSpeed / STEER_MAX_SPEED;
+  carGroup.rotation.y = THREE.MathUtils.lerp(carGroup.rotation.y, -steerVisual * STEER_VISUAL_YAW, 0.12);
+  carGroup.rotation.z = THREE.MathUtils.lerp(carGroup.rotation.z, -steerVisual * STEER_VISUAL_ROLL, 0.12);
+
+  const dist = speed * dt;
+  const roadScroll = SCROLL_SIGN * dist / UNITS_PER_V;
+  for(const map of roadScrollMaps) map.offset.y += roadScroll;
+  roadMaps.sheen.offset.y += roadScroll * 1.35 + dt * 0.018;
+  for(const w of wheels) w.rotation.x += SPIN_SIGN * dist / WHEEL_RADIUS;
+
+  speedEl.textContent = Math.round(speed*3.6) + ' km/h';
+  controls.update();
+  composer.render();
+  requestAnimationFrame(tick);
+}
+tick();
+
+addEventListener('resize', ()=>{
+  camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+  composer.setSize(innerWidth, innerHeight);
+});
+</script>
+</body>
+</html>

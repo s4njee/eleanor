@@ -139,10 +139,10 @@ function main() {
   const tiles = new TilesRenderer();
   tiles.registerPlugin(new GoogleCloudAuthPlugin({ apiToken: GOOGLE_KEY, autoRefreshToken: true }));
   tiles.registerPlugin(new ReorientationPlugin({ lat: deg2rad(SPAWN.lat), lon: deg2rad(SPAWN.lon), height: 0 }));
-  tiles.errorTarget = 2.5;       // Restored high-detail LOD
+  tiles.errorTarget = 3.5;       // Sweet spot: crisp geometry without saturating network/API limits
   tiles.lruCache.maxSize = 5000; // Massively increased to prevent LRU thrashing
   tiles.lruCache.minSize = 4000;
-  tiles.downloadQueue.maxJobs = 20; // Allow more concurrent downloads
+  tiles.downloadQueue.maxJobs = 10; // Reduced from 20 to prevent Google API from throttling requests
   tiles.setCamera(camera);
   scene.add(tiles.group);
 

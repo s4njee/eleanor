@@ -3,13 +3,16 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite web --host 127.0.0.1",
-    "dev:host": "vite web --host 0.0.0.0"
+    "dev": "vite",
+    "dev:host": "vite --host 0.0.0.0",
+    "build": "vite build",
+    "preview": "vite preview"
   },
   "devDependencies": {
     "vite": "^8.0.16"
   },
   "dependencies": {
-    "three": "^0.160.0"
+    "3d-tiles-renderer": "^0.4.28",
+    "three": "^0.184.0"
   }
 }

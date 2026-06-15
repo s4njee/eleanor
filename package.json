@@ -2,6 +2,7 @@
   "name": "eleanor",
   "private": true,
   "type": "module",
+  "license": "MIT",
   "scripts": {
     "dev": "vite",
     "dev:host": "vite --host 0.0.0.0",

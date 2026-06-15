@@ -145,6 +145,16 @@ function main() {
   tiles.setCamera(camera);
   scene.add(tiles.group);
 
+  // Enable Anisotropic Filtering on all loaded building textures to drastically reduce side-blur at oblique angles
+  const maxAnisotropy = renderer.capabilities.getMaxAnisotropy();
+  tiles.onLoadModel = (scene) => {
+    scene.traverse(c => {
+      if (c.isMesh && c.material && c.material.map) {
+        c.material.map.anisotropy = maxAnisotropy;
+      }
+    });
+  };
+
   // Google's ToS requires the on-screen data attribution to stay visible.
   const attribEl = document.getElementById('attrib');
   function updateAttribution() {

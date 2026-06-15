@@ -139,9 +139,9 @@ function main() {
   const tiles = new TilesRenderer();
   tiles.registerPlugin(new GoogleCloudAuthPlugin({ apiToken: GOOGLE_KEY, autoRefreshToken: true }));
   tiles.registerPlugin(new ReorientationPlugin({ lat: deg2rad(SPAWN.lat), lon: deg2rad(SPAWN.lon), height: 0 }));
-  tiles.errorTarget = 2.5;       // Force higher LOD (lower error = higher poly count)
-  tiles.lruCache.maxSize = 2500; // Increased cache to handle the heavier geometry
-  tiles.lruCache.minSize = 2000;
+  tiles.errorTarget = 4.0;       // Balanced LOD (higher detail than 6.0, but doesn't stall network like 2.5)
+  tiles.lruCache.maxSize = 1500; // Scaled down to prevent memory leaks/thrashing
+  tiles.lruCache.minSize = 1200;
   tiles.setCamera(camera);
   scene.add(tiles.group);
 

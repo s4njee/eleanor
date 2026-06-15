@@ -6,30 +6,79 @@ import { TilesRenderer, WGS84_ELLIPSOID } from '3d-tiles-renderer/three';
 import { ReorientationPlugin } from '3d-tiles-renderer/three/plugins';
 import { GoogleCloudAuthPlugin } from '3d-tiles-renderer/core/plugins';
 
-// ---- config -------------------------------------------------------------
-// Default drive: down Manhattan (Times Square -> Financial District) through the
-// skyscrapers, rendered with Google Photorealistic 3D Tiles (real textured city).
-// Alternatives — swap START/END:
-//   San Francisco    : {lat:37.76928,lon:-122.48618} -> {lat:37.79553,lon:-122.39379}
-//   Chicago Loop     : {lat:41.8855, lon:-87.6210}   -> {lat:41.8676, lon:-87.6075}
-//   Las Vegas Strip  : {lat:36.1290, lon:-115.1665}  -> {lat:36.1003, lon:-115.1729}
-const START = { lat: 40.75800, lon: -73.98551 };   // Times Square
-const END   = { lat: 40.70726, lon: -74.00874 };   // Financial District (Wall St)
-const ROUTE_LATERAL_OFFSET = 0;        // metres; nudge onto the visible lane if the OSM centreline is off
+// ---- dynamic config via URL ---------------------------------------------
+const params = new URLSearchParams(location.search);
+const spawnLat = parseFloat(params.get('lat')) || 40.75800;
+const spawnLon = parseFloat(params.get('lon')) || -73.98551;
+const spawnName = params.get('name') || 'Times Square';
 
-// car / driving (reused tuning from index.html, gentler accel for real roads)
+const SPAWN = { lat: spawnLat, lon: spawnLon };
+const SPAWN_HEADING = Math.PI;   // radians, 0 = +Z, PI = -Z (south)
+
+// car / driving tuning
 const WHEEL_RADIUS = 0.325, SPIN_SIGN = -1;
-const MAX_SPEED = 30, ACCEL = 13, DECEL = 22;
+const MAX_SPEED = 30;           // m/s (~108 km/h)
+const REVERSE_MAX = 5;          // m/s
+const ACCEL = 13;               // m/s²
+const BRAKE_DECEL = 28;         // m/s² (braking is stronger than coast)
+const COAST_DECEL = 4;          // m/s² (no input = gentle coast-down)
+const HANDBRAKE_DECEL = 45;     // m/s²
+
+// steering (bicycle model)
+const WHEELBASE = 2.6;          // metres (front-to-rear axle)
+const MAX_STEER = 0.6;          // radians (~35°)
+const STEER_SPEED = 2.5;        // rad/s (how fast the wheel turns)
+const STEER_RETURN = 4.0;       // rad/s (how fast it centres when released)
+
+// chase camera
 const CHASE_BACK = 7.5, CHASE_UP = 3.2, LOOK_H = 1.3, CHASE_LERP = 3.2;
+
+// visual
 const BANK_GAIN = 0.004, BANK_MAX = 0.22;
 
-// Offline fallback: real OSRM result for the default Manhattan route (decimated) so
-// the page still drives if router.project-osrm.org is rate-limited / unreachable.
-const FALLBACK_ROUTE = [[-73.985506,40.758002],[-73.985684,40.758025],[-73.986728,40.758462],[-73.98834,40.759223],[-73.987929,40.759787],[-73.987252,40.759501],[-73.985492,40.758767],[-73.98508,40.758597],[-73.982703,40.757579],[-73.982124,40.757335],[-73.979023,40.756037],[-73.978404,40.755779],[-73.977408,40.755362],[-73.976593,40.755022],[-73.976285,40.754888],[-73.975925,40.754732],[-73.974627,40.754179],[-73.97419,40.753994],[-73.97273,40.753385],[-73.971715,40.752958],[-73.970388,40.752315],[-73.97084,40.751699],[-73.971263,40.751122],[-73.971582,40.750677],[-73.971751,40.750441],[-73.972131,40.749927],[-73.972008,40.749748],[-73.970054,40.74892],[-73.969717,40.748728],[-73.969596,40.748641],[-73.968664,40.74824],[-73.968539,40.748156],[-73.968486,40.74807],[-73.968485,40.747989],[-73.968532,40.747899],[-73.968985,40.747281],[-73.969426,40.746756],[-73.970923,40.745191],[-73.971258,40.744685],[-73.971241,40.744513],[-73.97132,40.744347],[-73.971864,40.743525],[-73.972226,40.743081],[-73.972554,40.742527],[-73.972741,40.741974],[-73.972904,40.740672],[-73.973155,40.739517],[-73.973433,40.738873],[-73.973816,40.738339],[-73.974629,40.737221],[-73.9748,40.73695],[-73.974945,40.736641],[-73.975031,40.736331],[-73.97506,40.736089],[-73.97505,40.73578],[-73.974974,40.73541],[-73.973982,40.73159],[-73.973828,40.731279],[-73.973603,40.730971],[-73.973229,40.730618],[-73.972539,40.730051],[-73.972279,40.729796],[-73.972018,40.729421],[-73.971875,40.729114],[-73.971792,40.728795],[-73.971765,40.728481],[-73.971821,40.727949],[-73.971958,40.72697],[-73.972027,40.726642],[-73.97213,40.726334],[-73.972318,40.725937],[-73.972651,40.72534],[-73.973019,40.724756],[-73.973389,40.724165],[-73.974252,40.722792],[-73.974405,40.72249],[-73.974531,40.722169],[-73.974614,40.72185],[-73.974715,40.721087],[-73.975043,40.71849],[-73.975183,40.717859],[-73.97538,40.71723],[-73.975638,40.716611],[-73.977759,40.712523],[-73.977963,40.71219],[-73.978201,40.711928],[-73.978451,40.71171],[-73.97879,40.711474],[-73.979136,40.711289],[-73.979504,40.71114],[-73.979894,40.711026],[-73.980304,40.710946],[-73.980726,40.710904],[-73.984225,40.71066],[-73.984995,40.71059],[-73.989528,40.710064],[-73.993228,40.709517],[-73.994054,40.709414],[-73.996849,40.709027],[-73.997732,40.708877],[-73.998052,40.708785],[-73.998807,40.708555],[-73.999018,40.7085],[-73.999235,40.708488],[-73.999515,40.708577],[-73.999653,40.708671],[-73.999742,40.708781],[-73.99997,40.709119],[-74.000138,40.709295],[-74.00035,40.709477],[-74.000645,40.709848],[-74.000939,40.710091],[-74.001211,40.710056],[-74.001449,40.709733],[-74.001619,40.709524],[-74.001809,40.709374],[-74.002452,40.708887],[-74.002836,40.708573],[-74.003293,40.708197],[-74.003503,40.708007],[-74.004074,40.707443],[-74.004936,40.706901],[-74.005694,40.706381],[-74.006088,40.706103],[-74.006753,40.705634],[-74.007411,40.706036],[-74.007988,40.706355],[-74.008954,40.706928],[-74.008976,40.706995],[-74.008739,40.707256]];
+// ---- OSM road constraint ------------------------------------------------
+const ROAD_HALF_WIDTH = 6;      // metres — hard wall at road edge
+
+// Calculate a ~3.3x3.3 km bounding box around spawn for road fetching
+// (0.015 degrees is roughly 1.6km from center)
+const bboxHalf = 0.015;
+const ROAD_BBOX = `${(SPAWN.lat - bboxHalf).toFixed(5)},${(SPAWN.lon - bboxHalf).toFixed(5)},${(SPAWN.lat + bboxHalf).toFixed(5)},${(SPAWN.lon + bboxHalf).toFixed(5)}`;
+const ROAD_TYPES = 'motorway|trunk|primary|secondary|tertiary|residential|service|unclassified|living_street';
+const OVERPASS_URL = 'https://overpass-api.de/api/interpreter';
+const ROAD_GRID_CELL = 20;      // metres per grid cell
 
 const deg2rad = THREE.MathUtils.degToRad;
 const loadEl = document.getElementById('load');
 const speedEl = document.getElementById('speed');
+
+// ---- Search UI Logic ----------------------------------------------------
+const searchForm = document.getElementById('searchForm');
+const searchInput = document.getElementById('searchInput');
+if (searchForm && searchInput) {
+  if (spawnName !== 'Times Square') searchInput.placeholder = `Driving in ${spawnName}`;
+  searchForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const q = searchInput.value.trim();
+    if (!q) return;
+    const btn = searchForm.querySelector('button');
+    btn.textContent = '...';
+    try {
+      const res = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=1`);
+      const data = await res.json();
+      if (data && data.length > 0) {
+        const loc = data[0];
+        // Use the user's exact query for the display name instead of truncating the API response
+        window.location.href = `?lat=${loc.lat}&lon=${loc.lon}&name=${encodeURIComponent(q)}`;
+      } else {
+        alert("City not found.");
+        btn.textContent = 'Go';
+      }
+    } catch (err) {
+      alert("Search failed.");
+      btn.textContent = 'Go';
+    }
+  });
+}
 
 // ---- Google Maps API key gate -------------------------------------------
 const ENV_KEY = import.meta.env ? import.meta.env.VITE_GOOGLE_MAPS_KEY : undefined;
@@ -67,8 +116,8 @@ function main() {
   scene.background = new THREE.Color(SKY);
   scene.fog = new THREE.Fog(SKY, 2500, 11000);   // soften far LOD swaps
 
-  const camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 1, 2e7);
-  camera.position.set(40, 35, 40);
+  const camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 1, 15000);
+  camera.position.set(40, 5000, 40);
   camera.lookAt(0, 0, 0);
 
   const controls = new OrbitControls(camera, renderer.domElement);
@@ -87,11 +136,12 @@ function main() {
   const greyEnvTex = makeGreyEnv(renderer);
 
   // ---- Google Photorealistic 3D Tiles -----------------------------------
-  // One global photoreal tileset (terrain + textured buildings + trees), reoriented
-  // to the route start. The car raycasts against this for its height.
   const tiles = new TilesRenderer();
   tiles.registerPlugin(new GoogleCloudAuthPlugin({ apiToken: GOOGLE_KEY, autoRefreshToken: true }));
-  tiles.registerPlugin(new ReorientationPlugin({ lat: deg2rad(START.lat), lon: deg2rad(START.lon), height: 0 }));
+  tiles.registerPlugin(new ReorientationPlugin({ lat: deg2rad(SPAWN.lat), lon: deg2rad(SPAWN.lon), height: 0 }));
+  tiles.errorTarget = 2.5;       // Force higher LOD (lower error = higher poly count)
+  tiles.lruCache.maxSize = 2500; // Increased cache to handle the heavier geometry
+  tiles.lruCache.minSize = 2000;
   tiles.setCamera(camera);
   scene.add(tiles.group);
 
@@ -119,7 +169,6 @@ function main() {
   }, 15000);
 
   // ---- geo -> local scene frame -----------------------------------------
-  // tiles.group.matrixWorld maps ECEF -> reoriented local metres (start at origin, Y up).
   const _ecef = new THREE.Vector3();
   function geoToLocal(latDeg, lonDeg, height, target) {
     WGS84_ELLIPSOID.getCartographicToPosition(deg2rad(latDeg), deg2rad(lonDeg), height || 0, _ecef);
@@ -137,127 +186,274 @@ function main() {
   });
   loadCar(carGroup, wheels, bodyMat, () => { carLoaded = true; });
 
-  // ---- route ------------------------------------------------------------
-  let routeCoords = null, routeCurve = null, routeLength = 0;
-  const startLocal = new THREE.Vector3();
-  let routeReady = false, driveReady = false;
-  let routeLine = null;
-
-  getRoute(START, END).then(c => { routeCoords = c; });
-
-  function tryBuildRoute() {
-    if (routeReady || !routeCoords || !tilesReady) return;
-    tiles.group.updateMatrixWorld(true);
-    geoToLocal(START.lat, START.lon, 0, startLocal);
-    if (!isFinite(startLocal.length()) || startLocal.length() > 1e5) return;  // matrixWorld not settled
-    const pts = routeCoords.map(([lon, lat]) => { const v = geoToLocal(lat, lon, 0, new THREE.Vector3()); v.y = 0; return v; });
-    routeCurve = new THREE.CatmullRomCurve3(pts, false, 'catmullrom', 0.5);
-    routeLength = routeCurve.getLength();
-    routeReady = true;
-    buildRouteLine(pts);
-  }
-
-  function buildRouteLine(pts) {
-    const dense = routeCurve.getSpacedPoints(Math.max(200, pts.length * 2));
-    const g = new THREE.BufferGeometry().setFromPoints(dense);
-    routeLine = new THREE.Line(g, new THREE.LineBasicMaterial({
-      color: 0xffb000, transparent: true, opacity: 0.85, toneMapped: false, depthWrite: false
-    }));
-    routeLine.renderOrder = 2;
-    routeLine.frustumCulled = false;
-    scene.add(routeLine);
-  }
-
-  // raycast the route line onto the terrain a few points per frame (drapes as tiles load)
-  let drapeCursor = 0;
-  function drapeRouteLine() {
-    if (!routeLine) return;
-    const pos = routeLine.geometry.attributes.position;
-    for (let n = 0; n < 24; n++) {
-      const i = drapeCursor % pos.count;
-      drapeCursor++;
-      const hit = sampleGround(pos.getX(i), pos.getZ(i));
-      if (hit && Math.abs(hit.point.y) < 2000) pos.setY(i, hit.point.y + 0.4);
-    }
-    pos.needsUpdate = true;
-  }
-
   // ---- surface raycast --------------------------------------------------
   const _rc = new THREE.Raycaster();
   _rc.firstHitOnly = true;
   const _down = new THREE.Vector3(0, -1, 0);
   const _from = new THREE.Vector3();
   const _nmat = new THREE.Matrix3();
-  // Cast within a sane vertical window (≈[-1000, 3000] m around the start) so we never
-  // latch onto coarse low-LOD tiles, whose surfaces can sit tens of km below the tangent
-  // plane due to earth curvature. Real city terrain lives near 0; garbage is excluded.
   function sampleGround(x, z) {
-    _rc.set(_from.set(x, 3000, z), _down);
-    _rc.far = 4000;
+    _rc.set(_from.set(x, 9000, z), _down);
+    _rc.far = 10000;
     const hits = _rc.intersectObject(tiles.group, true);
     return hits.length ? hits[0] : null;
   }
 
-  // ---- driving state ----------------------------------------------------
-  let driving = false, speed = 0, distance = 0;
+  // ---- OSM road network -------------------------------------------------
+  let roadsData = null;     // Array<{name: string, highway: string, coords: Array<[lon, lat]>}>
+  let roadGrid = null;      // RoadGrid — spatial index for nearest-road queries
+  let roadsReady = false;   // true once grid is built (or on fetch failure)
+  
+  // ---- minimap ----------------------------------------------------------
+  const minimapCanvas = document.getElementById('minimap');
+  const minimapCtx = minimapCanvas ? minimapCanvas.getContext('2d') : null;
+  let roadPath2D = null;
+
+  loadEl.textContent = 'Loading road network...';
+
+  fetchRoads(ROAD_BBOX, ROAD_TYPES).then(roads => {
+    roadsData = roads;
+    loadEl.textContent = 'Roads loaded. Streaming terrain...';
+  }).catch(err => {
+    console.warn('OSM roads unavailable — driving unconstrained.', err);
+    roadsReady = true;   // allow driving without road constraint
+    loadEl.textContent = 'Roads unavailable. Streaming terrain...';
+  });
+
+  function tryBuildRoads() {
+    if (roadsReady || !roadsData || !tilesReady) return;
+    tiles.group.updateMatrixWorld(true);
+
+    // verify geoToLocal is settled
+    const test = new THREE.Vector3();
+    geoToLocal(SPAWN.lat, SPAWN.lon, 0, test);
+    if (!isFinite(test.length()) || test.length() > 1e5) return;
+
+    // convert all road polylines to local XZ and build the spatial grid
+    roadGrid = new RoadGrid(ROAD_GRID_CELL);
+    if (minimapCtx) roadPath2D = new Path2D();
+    
+    const v = new THREE.Vector3();
+    let segCount = 0;
+    for (const road of roadsData) {
+      let prevX, prevZ;
+      for (let i = 0; i < road.coords.length; i++) {
+        const [lon, lat] = road.coords[i];
+        geoToLocal(lat, lon, 0, v);
+        if (i > 0) {
+          const isMajor = road.name && /^(motorway|trunk|primary|secondary|tertiary)$/.test(road.highway);
+          roadGrid.addSegment(prevX, prevZ, v.x, v.z, isMajor ? road.name : undefined);
+          segCount++;
+          if (roadPath2D) {
+            roadPath2D.moveTo(prevX, prevZ);
+            roadPath2D.lineTo(v.x, v.z);
+          }
+        }
+        prevX = v.x; prevZ = v.z;
+      }
+    }
+    console.log(`Road grid built: ${roadsData.length} ways, ${segCount} segments, ${roadGrid.cellCount} cells`);
+    roadsReady = true;
+  }
+
+  // ---- free-drive state -------------------------------------------------
+  const carPos = new THREE.Vector3();   // world position (XZ driven, Y from terrain)
+  let heading = SPAWN_HEADING;          // yaw in radians (0 = +Z)
+  let speed = 0;                        // m/s (positive = forward)
+  let steerAngle = 0;                   // current wheel angle (radians, + = left)
   let smoothY = 0;
   const smoothNormal = new THREE.Vector3(0, 1, 0);
   const UP = new THREE.Vector3(0, 1, 0);
+
+  // ---- input ------------------------------------------------------------
+  const keys = {};
   addEventListener('keydown', e => {
-    if (e.code === 'Space') { e.preventDefault(); driving = true; }
-    if (e.code === 'KeyO') { controls.enabled = !controls.enabled; }
-    if (e.code === 'KeyR') { distance = 0; speed = 0; }   // restart route
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+    keys[e.code] = true;
+    if (e.code === 'Space') e.preventDefault();
+    if (e.code === 'KeyO') controls.enabled = !controls.enabled;
+    if (e.code === 'KeyR') { // reset to spawn
+      const spawnTest = new THREE.Vector3();
+      tiles.group.updateMatrixWorld(true);
+      geoToLocal(SPAWN.lat, SPAWN.lon, 0, spawnTest);
+      if (roadGrid && roadGrid.cellCount > 0) {
+        const nearest = roadGrid.absoluteNearest(spawnTest.x, spawnTest.z);
+        if (nearest.dist !== Infinity) {
+          spawnTest.x = nearest.x;
+          spawnTest.z = nearest.z;
+        }
+      }
+      carPos.set(spawnTest.x, smoothY, spawnTest.z);
+      heading = SPAWN_HEADING;
+      speed = 0;
+      steerAngle = 0;
+    }
   });
-  addEventListener('keyup', e => { if (e.code === 'Space') { e.preventDefault(); driving = false; } });
-  addEventListener('blur', () => { driving = false; });
+  addEventListener('keyup', e => {
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+    keys[e.code] = false;
+    if (e.code === 'Space') e.preventDefault();
+  });
+  addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
+
+  // ---- spawn ------------------------------------------------------------
+  let driveReady = false;
+  let spawnSnapped = false;
+  const spawnLocal = new THREE.Vector3();
 
   function tryStart() {
-    if (driveReady || !routeReady || !carLoaded) return;
-    const hit = sampleGround(startLocal.x, startLocal.z);
-    if (!hit) return;   // wait until in-window terrain has streamed in near the start
+    if (driveReady || !tilesReady || !carLoaded || !roadsReady) return;
+    tiles.group.updateMatrixWorld(true);
+
+    if (!spawnSnapped) {
+      geoToLocal(SPAWN.lat, SPAWN.lon, 0, spawnLocal);
+      if (!isFinite(spawnLocal.length()) || spawnLocal.length() > 1e5) return;
+      if (roadGrid && roadGrid.cellCount > 0) {
+        const nearest = roadGrid.absoluteNearest(spawnLocal.x, spawnLocal.z);
+        if (nearest.dist !== Infinity) {
+          spawnLocal.x = nearest.x;
+          spawnLocal.z = nearest.z;
+        }
+      }
+      spawnSnapped = true;
+    }
+
+    const hit = sampleGround(spawnLocal.x, spawnLocal.z);
+    if (!hit) return;   // wait until terrain has streamed in near the start
     smoothY = hit.point.y;
     smoothNormal.copy(faceNormal(hit));
-    placeCar(0);
+    carPos.set(spawnLocal.x, smoothY, spawnLocal.z);
+    heading = SPAWN_HEADING;
     driveReady = true;
     loadEl.style.opacity = 0;
     setTimeout(() => (loadEl.style.display = 'none'), 600);
   }
 
-  // ---- per-frame car placement ------------------------------------------
-  const _p = new THREE.Vector3(), _t = new THREE.Vector3(), _right = new THREE.Vector3();
-  const _fwd = new THREE.Vector3(), _basis = new THREE.Matrix4(), _q = new THREE.Quaternion();
-  const _ta = new THREE.Vector3(), _tb = new THREE.Vector3(), _zAxis = new THREE.Vector3(0, 0, 1);
+  // ---- per-frame car update (bicycle model + road constraint) -----------
+  const _fwd = new THREE.Vector3();
+  const _right = new THREE.Vector3();
+  const _basis = new THREE.Matrix4();
+  const _q = new THREE.Quaternion();
+  const _qBank = new THREE.Quaternion();
+  const _zAxis = new THREE.Vector3(0, 0, 1);
 
-  function placeCar(u) {
-    routeCurve.getPointAt(u, _p);
-    routeCurve.getTangentAt(u, _t); _t.y = 0; _t.normalize();
-    if (ROUTE_LATERAL_OFFSET) { _right.crossVectors(_t, UP).normalize(); _p.addScaledVector(_right, ROUTE_LATERAL_OFFSET); }
-    const hit = sampleGround(_p.x, _p.z);
-    if (hit) {   // the ray window already filters coarse km-scale outliers; just smooth
+  function updateCar(dt) {
+    // --- input mapping ---
+    const wantThrottle = keys['KeyW'] || keys['ArrowUp'];
+    const wantBrake    = keys['KeyS'] || keys['ArrowDown'];
+    const wantLeft     = keys['KeyA'] || keys['ArrowLeft'];
+    const wantRight    = keys['KeyD'] || keys['ArrowRight'];
+    const wantHandbrake = keys['Space'];
+
+    // --- steering ---
+    let steerTarget = 0;
+    if (wantLeft)  steerTarget += MAX_STEER;
+    if (wantRight) steerTarget -= MAX_STEER;
+
+    if (steerTarget !== 0) {
+      // steer toward target
+      const dir = Math.sign(steerTarget - steerAngle);
+      steerAngle += dir * STEER_SPEED * dt;
+      if (dir > 0 && steerAngle > steerTarget) steerAngle = steerTarget;
+      if (dir < 0 && steerAngle < steerTarget) steerAngle = steerTarget;
+    } else {
+      // self-centre
+      const dir = Math.sign(-steerAngle);
+      steerAngle += dir * STEER_RETURN * dt;
+      if (dir > 0 && steerAngle > 0) steerAngle = 0;
+      if (dir < 0 && steerAngle < 0) steerAngle = 0;
+    }
+
+    // --- speed ---
+    if (wantHandbrake) {
+      // handbrake: strong decel toward zero
+      if (speed > 0) speed = Math.max(0, speed - HANDBRAKE_DECEL * dt);
+      else           speed = Math.min(0, speed + HANDBRAKE_DECEL * dt);
+    } else if (wantThrottle && !wantBrake) {
+      if (speed < 0) {
+        // braking from reverse
+        speed = Math.min(0, speed + BRAKE_DECEL * dt);
+      } else {
+        speed = Math.min(MAX_SPEED, speed + ACCEL * dt);
+      }
+    } else if (wantBrake && !wantThrottle) {
+      if (speed > 0.5) {
+        // braking forward
+        speed = Math.max(0, speed - BRAKE_DECEL * dt);
+      } else {
+        // reverse
+        speed = Math.max(-REVERSE_MAX, speed - ACCEL * 0.5 * dt);
+      }
+    } else {
+      // coast down
+      if (speed > 0) speed = Math.max(0, speed - COAST_DECEL * dt);
+      else           speed = Math.min(0, speed + COAST_DECEL * dt);
+    }
+
+    // --- bicycle model: update heading ---
+    if (Math.abs(speed) > 0.01) {
+      const turnRate = (speed / WHEELBASE) * Math.tan(steerAngle);
+      heading += turnRate * dt;
+    }
+
+    // --- move position ---
+    carPos.x += speed * Math.sin(heading) * dt;
+    carPos.z += speed * Math.cos(heading) * dt;
+
+    // --- road constraint ---
+    // Clamp the car to the nearest OSM road and raycast at the road's
+    // centerline position so the height comes from the road surface,
+    // not building roofs or photogrammetry clutter.
+    let rayX = carPos.x, rayZ = carPos.z;
+    if (roadGrid) {
+      const nearest = roadGrid.nearest(carPos.x, carPos.z);
+      if (nearest.dist < 100) {            // only constrain when a road is nearby
+        if (nearest.dist > ROAD_HALF_WIDTH) {
+          // push car back to road edge
+          const dx = carPos.x - nearest.x;
+          const dz = carPos.z - nearest.z;
+          const d = Math.max(nearest.dist, 1e-6);
+          carPos.x = nearest.x + (dx / d) * ROAD_HALF_WIDTH;
+          carPos.z = nearest.z + (dz / d) * ROAD_HALF_WIDTH;
+
+          // kill lateral speed component so you don't slide along the wall
+          if (speed > 0) speed *= 0.92;
+        }
+        // raycast at the road centerline, not the car position
+        rayX = nearest.x;
+        rayZ = nearest.z;
+      }
+    }
+
+    // --- terrain height (raycasted at road position) ---
+    const hit = sampleGround(rayX, rayZ);
+    if (hit) {
       smoothY = THREE.MathUtils.lerp(smoothY, hit.point.y, 0.25);
       smoothNormal.lerp(faceNormal(hit), 0.18).normalize();
     }
-    carGroup.position.set(_p.x, smoothY + 0.05, _p.z);
-    orientCar(_t, smoothNormal, bankAt(u));
+    carPos.y = smoothY + 0.05;
+
+    // --- orient car ---
+    carGroup.position.copy(carPos);
+    _fwd.set(Math.sin(heading), 0, Math.cos(heading)).normalize();
+
+    // bank into turns
+    const bank = THREE.MathUtils.clamp(-steerAngle * speed * BANK_GAIN * 2, -BANK_MAX, BANK_MAX);
+    orientCar(_fwd, smoothNormal, bank);
+
+    // --- wheels ---
+    const droll = SPIN_SIGN * (speed * dt) / WHEEL_RADIUS;
+    for (const w of wheels) w.rotation.x += droll;
   }
 
   function orientCar(forward, up, bank) {
-    _right.crossVectors(forward, up).normalize();  // right = forward x up (right-handed)
-    _fwd.crossVectors(up, _right).normalize();     // forward, re-orthogonalised to the surface slope
-    _basis.makeBasis(_right, up, _fwd.negate());   // car nose is -Z, so local +Z = -forward
+    _right.crossVectors(forward, up).normalize();
+    const _adjFwd = new THREE.Vector3();
+    _adjFwd.crossVectors(up, _right).normalize();
+    _basis.makeBasis(_right, up, _adjFwd.negate());
     _q.setFromRotationMatrix(_basis);
-    _q.multiply(_qBank.setFromAxisAngle(_zAxis, bank));   // roll about car local Z
+    _q.multiply(_qBank.setFromAxisAngle(_zAxis, bank));
     carGroup.quaternion.slerp(_q, 0.2);
-  }
-  const _qBank = new THREE.Quaternion();
-
-  function bankAt(u) {
-    const du = 0.0015;
-    routeCurve.getTangentAt(Math.max(0, u - du), _ta); _ta.y = 0; _ta.normalize();
-    routeCurve.getTangentAt(Math.min(1, u + du), _tb); _tb.y = 0; _tb.normalize();
-    const turn = Math.sign(_ta.x * _tb.z - _ta.z * _tb.x);   // signed
-    const k = _ta.angleTo(_tb) / Math.max(2 * du * routeLength, 1e-3);
-    return THREE.MathUtils.clamp(-turn * k * speed * speed * BANK_GAIN, -BANK_MAX, BANK_MAX);
   }
 
   function faceNormal(hit) {
@@ -272,13 +468,12 @@ function main() {
   // ---- chase cam --------------------------------------------------------
   const _camGoal = new THREE.Vector3(), _look = new THREE.Vector3(), _camFwd = new THREE.Vector3();
   function updateChase(dt) {
-    const u = routeLength > 0 ? distance / routeLength : 0;
-    routeCurve.getTangentAt(u, _camFwd); _camFwd.y = 0; _camFwd.normalize();
+    _camFwd.set(Math.sin(heading), 0, Math.cos(heading)).normalize();
     _camGoal.copy(carGroup.position).addScaledVector(_camFwd, -CHASE_BACK).addScaledVector(UP, CHASE_UP);
     const k = 1 - Math.exp(-CHASE_LERP * dt);
     camera.position.x = THREE.MathUtils.lerp(camera.position.x, _camGoal.x, k);
     camera.position.z = THREE.MathUtils.lerp(camera.position.z, _camGoal.z, k);
-    camera.position.y = _camGoal.y;   // track height directly so the cam never lags/sinks through terrain
+    camera.position.y = _camGoal.y;
     _look.copy(carGroup.position).addScaledVector(UP, LOOK_H);
     camera.lookAt(_look);
   }
@@ -288,31 +483,100 @@ function main() {
   function tick() {
     const dt = Math.min(clock.getDelta(), 0.05);
 
+    tryBuildRoads();
+    tryStart();
+
+    if (driveReady) {
+      updateCar(dt);
+      if (!controls.enabled) updateChase(dt);
+      speedEl.textContent = Math.round(Math.abs(speed) * 3.6) + ' km/h';
+    } else if (controls.enabled) {
+      controls.update();
+    }
+
     camera.updateMatrixWorld();
     tiles.setResolutionFromRenderer(camera, renderer);
     tiles.update();
     updateAttribution();
 
-    tryBuildRoute();
-    if (routeReady) drapeRouteLine();
-    tryStart();
-
-    if (driveReady) {
-      speed += (driving ? ACCEL : -DECEL) * dt;
-      speed = Math.max(0, Math.min(MAX_SPEED, speed));
-      distance = Math.min(distance + speed * dt, routeLength);
-      const u = routeLength > 0 ? distance / routeLength : 0;
-      placeCar(u);
-      const droll = SPIN_SIGN * (speed * dt) / WHEEL_RADIUS;
-      for (const w of wheels) w.rotation.x += droll;
-      updateChase(dt);
-      const arrived = distance >= routeLength - 0.5;
-      speedEl.textContent = arrived ? 'arrived · press R' : Math.round(speed * 3.6) + ' km/h';
-    } else if (controls.enabled) {
-      controls.update();
+    renderer.render(scene, camera);
+    
+    // --- render minimap ---
+    if (minimapCtx && roadPath2D && driveReady) {
+      minimapCtx.clearRect(0, 0, 160, 160);
+      minimapCtx.save();
+      
+      minimapCtx.translate(80, 80);
+      minimapCtx.rotate(heading + Math.PI);
+      
+      const scale = 0.2; // 1 pixel = 5 meters
+      minimapCtx.scale(scale, scale);
+      minimapCtx.translate(-carPos.x, -carPos.z);
+      
+      // Draw roads
+      minimapCtx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+      minimapCtx.lineWidth = 2 / scale;
+      minimapCtx.lineCap = 'round';
+      minimapCtx.lineJoin = 'round';
+      minimapCtx.stroke(roadPath2D);
+      
+      // Draw street names
+      minimapCtx.font = '11px system-ui, sans-serif';
+      minimapCtx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+      minimapCtx.textAlign = 'center';
+      minimapCtx.textBaseline = 'middle';
+      
+      const mapRot = heading + Math.PI;
+      
+      // Localized street names
+      if (roadGrid) {
+        const visibleNames = new Map();
+        const segments = roadGrid.getSegmentsInRadius(carPos.x, carPos.z, 400);
+        
+        for (const seg of segments) {
+          const [px, pz, dist] = projectOnSegment(carPos.x, carPos.z, seg.ax, seg.az, seg.bx, seg.bz);
+          
+          if (!visibleNames.has(seg.name) || dist < visibleNames.get(seg.name).dist) {
+            visibleNames.set(seg.name, {
+              x: px,
+              z: pz,
+              angle: Math.atan2(seg.bz - seg.az, seg.bx - seg.ax),
+              dist: dist
+            });
+          }
+        }
+        
+        for (const [name, label] of visibleNames.entries()) {
+          minimapCtx.save();
+          minimapCtx.translate(label.x, label.z);
+          
+          let absRot = mapRot + label.angle;
+          absRot = (absRot % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2);
+          let flip = (absRot > Math.PI / 2 && absRot < Math.PI * 1.5);
+          
+          minimapCtx.rotate(label.angle + (flip ? Math.PI : 0));
+          minimapCtx.scale(1/scale, 1/scale);
+          
+          minimapCtx.shadowColor = 'rgba(0,0,0,0.8)';
+          minimapCtx.shadowBlur = 4;
+          minimapCtx.fillText(name, 0, flip ? 6 : -6);
+          
+          minimapCtx.restore();
+        }
+      }
+      
+      minimapCtx.restore();
+      
+      // Draw car (always centered, pointing up)
+      minimapCtx.fillStyle = '#3b82f6';
+      minimapCtx.beginPath();
+      minimapCtx.moveTo(80, 74);
+      minimapCtx.lineTo(85, 84);
+      minimapCtx.lineTo(80, 81);
+      minimapCtx.lineTo(75, 84);
+      minimapCtx.fill();
     }
 
-    renderer.render(scene, camera);
     requestAnimationFrame(tick);
   }
   tick();
@@ -324,24 +588,147 @@ function main() {
   });
 }
 
-// ---- helpers (module scope) ---------------------------------------------
-async function getRoute(a, b) {
-  const key = `osrm:${a.lon},${a.lat};${b.lon},${b.lat}`;
-  const cached = localStorage.getItem(key);
-  if (cached) { try { return JSON.parse(cached); } catch (e) {} }
-  try {
-    const url = `https://router.project-osrm.org/route/v1/driving/${a.lon},${a.lat};${b.lon},${b.lat}?overview=full&geometries=geojson`;
-    const res = await fetch(url);
-    const json = await res.json();
-    const coords = json.routes[0].geometry.coordinates;
-    localStorage.setItem(key, JSON.stringify(coords));
-    return coords;
-  } catch (e) {
-    console.warn('OSRM unavailable — using embedded fallback route.', e);
-    return FALLBACK_ROUTE;
+// ---- OSM road fetching (module scope) -----------------------------------
+async function fetchRoads(bbox, types) {
+  const cacheKey = `osm_roads_v3:${bbox}`;
+  const cached = localStorage.getItem(cacheKey);
+  if (cached) {
+    try {
+      const parsed = JSON.parse(cached);
+      console.log(`OSM roads loaded from cache (${parsed.length} ways)`);
+      return parsed;
+    } catch (e) { /* cache corrupt, re-fetch */ }
+  }
+
+  const query = `[out:json][timeout:30];way["highway"~"^(${types})$"](${bbox});(._;>;);out body;>;out skel qt;`;
+  const res = await fetch(OVERPASS_URL, {
+    method: 'POST',
+    body: `data=${encodeURIComponent(query)}`
+  });
+  if (!res.ok) throw new Error(`Overpass HTTP ${res.status}`);
+  const json = await res.json();
+
+  // Parse into compact coordinate arrays: Array<Array<[lon, lat]>>
+  const nodes = new Map();
+  const roads = [];
+  for (const el of json.elements) {
+    if (el.type === 'node') nodes.set(el.id, [el.lon, el.lat]);
+  }
+  for (const el of json.elements) {
+    if (el.type === 'way' && el.nodes) {
+      const coords = el.nodes.map(id => nodes.get(id)).filter(Boolean);
+      const name = el.tags && el.tags.name ? el.tags.name : '';
+      const highway = el.tags && el.tags.highway ? el.tags.highway : '';
+      if (coords.length >= 2) roads.push({ name, highway, coords });
+    }
+  }
+
+  try { localStorage.setItem(cacheKey, JSON.stringify(roads)); } catch (e) {
+    console.warn('Could not cache road data in localStorage:', e);
+  }
+  console.log(`OSM roads fetched: ${roads.length} ways`);
+  return roads;
+}
+
+// ---- 2D spatial grid for nearest-road queries ---------------------------
+// Projects the car onto the closest road segment in O(1) average time.
+class RoadGrid {
+  constructor(cellSize) {
+    this.cellSize = cellSize;
+    this.cells = new Map();
+  }
+
+  get cellCount() { return this.cells.size; }
+
+  _key(cx, cz) { return (cx * 73856093) ^ (cz * 19349663); }   // int hash — faster than string concat
+
+  addSegment(ax, az, bx, bz, name) {
+    const cs = this.cellSize;
+    const minCx = Math.floor(Math.min(ax, bx) / cs);
+    const maxCx = Math.floor(Math.max(ax, bx) / cs);
+    const minCz = Math.floor(Math.min(az, bz) / cs);
+    const maxCz = Math.floor(Math.max(az, bz) / cs);
+    const seg = { ax, az, bx, bz, name };
+    for (let cx = minCx; cx <= maxCx; cx++) {
+      for (let cz = minCz; cz <= maxCz; cz++) {
+        const k = this._key(cx, cz);
+        let bucket = this.cells.get(k);
+        if (!bucket) { bucket = []; this.cells.set(k, bucket); }
+        bucket.push(seg);
+      }
+    }
+  }
+
+  getSegmentsInRadius(x, z, r) {
+    const cs = this.cellSize;
+    const cx0 = Math.floor(x / cs), cz0 = Math.floor(z / cs);
+    const range = Math.ceil(r / cs);
+    const result = [];
+    const seen = new Set();
+    for (let dx = -range; dx <= range; dx++) {
+      for (let dz = -range; dz <= range; dz++) {
+        const k = this._key(cx0 + dx, cz0 + dz);
+        const bucket = this.cells.get(k);
+        if (bucket) {
+          for (let i = 0; i < bucket.length; i++) {
+            const seg = bucket[i];
+            if (seg.name && !seen.has(seg)) {
+              seen.add(seg);
+              result.push(seg);
+            }
+          }
+        }
+      }
+    }
+    return result;
+  }
+
+  nearest(x, z) {
+    const cs = this.cellSize;
+    const cx0 = Math.floor(x / cs), cz0 = Math.floor(z / cs);
+    let bestDist = Infinity, bestX = x, bestZ = z;
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dz = -1; dz <= 1; dz++) {
+        const k = this._key(cx0 + dx, cz0 + dz);
+        const bucket = this.cells.get(k);
+        if (!bucket) continue;
+        for (let i = 0; i < bucket.length; i++) {
+          const s = bucket[i];
+          const [px, pz, d] = projectOnSegment(x, z, s.ax, s.az, s.bx, s.bz);
+          if (d < bestDist) { bestDist = d; bestX = px; bestZ = pz; }
+        }
+      }
+    }
+    return { x: bestX, z: bestZ, dist: bestDist };
+  }
+
+  absoluteNearest(x, z) {
+    let bestDist = Infinity, bestX = x, bestZ = z;
+    for (const bucket of this.cells.values()) {
+      for (let i = 0; i < bucket.length; i++) {
+        const s = bucket[i];
+        const [px, pz, d] = projectOnSegment(x, z, s.ax, s.az, s.bx, s.bz);
+        if (d < bestDist) { bestDist = d; bestX = px; bestZ = pz; }
+      }
+    }
+    return { x: bestX, z: bestZ, dist: bestDist };
   }
 }
 
+function projectOnSegment(px, pz, ax, az, bx, bz) {
+  const dx = bx - ax, dz = bz - az;
+  const len2 = dx * dx + dz * dz;
+  if (len2 < 1e-8) {
+    const d = Math.hypot(px - ax, pz - az);
+    return [ax, az, d];
+  }
+  let t = ((px - ax) * dx + (pz - az) * dz) / len2;
+  t = Math.max(0, Math.min(1, t));
+  const projX = ax + t * dx, projZ = az + t * dz;
+  return [projX, projZ, Math.hypot(px - projX, pz - projZ)];
+}
+
+// ---- helpers (module scope) ---------------------------------------------
 function loadCar(carGroup, wheels, bodyMat, done) {
   const STRIPE_INNER = 0.05, STRIPE_OUTER = 0.27;
   const gltfLoader = new GLTFLoader();

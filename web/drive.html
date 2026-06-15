@@ -7,8 +7,11 @@
 <style>
   html,body{margin:0;height:100%;overflow:hidden;background:#0b0f14;font-family:system-ui,sans-serif}
   #c{display:block;width:100%;height:100%}
-  #hud{position:fixed;left:20px;bottom:20px;color:#eaf2ff;text-shadow:0 1px 3px rgba(0,0,0,.75);
-       font-size:14px;line-height:1.5;pointer-events:none;user-select:none}
+  #hud{position:fixed;left:20px;bottom:190px;color:#eaf2ff;text-shadow:0 1px 3px rgba(0,0,0,.75);
+       font-size:14px;line-height:1.5;pointer-events:none;user-select:none;z-index:10}
+  #minimap{position:fixed;left:20px;bottom:20px;width:160px;height:160px;border-radius:50%;
+           border:2px solid rgba(255,255,255,0.2);background:rgba(11,15,20,0.7);backdrop-filter:blur(4px);
+           pointer-events:none;z-index:10}
   #hud b{font-size:16px;color:#fff}
   #speed{position:fixed;right:20px;bottom:18px;color:#eaf2ff;font-variant-numeric:tabular-nums;
          text-shadow:0 1px 3px rgba(0,0,0,.75);font-size:13px;letter-spacing:.5px;
@@ -27,14 +30,25 @@
           max-width:84vw;color:#fff;font-size:11px;line-height:1.3;text-shadow:0 1px 2px rgba(0,0,0,.85);
           pointer-events:none;opacity:.92;white-space:nowrap;overflow:hidden}
   #attrib img{height:15px;vertical-align:middle}
-  @media (max-width:680px){ #hud{left:14px;bottom:16px;font-size:12px} #hud b{font-size:14px} #speed{right:14px;bottom:16px;font-size:12px} }
+  #searchForm{position:fixed;top:20px;left:50%;transform:translateX(-50%);display:flex;gap:8px;z-index:20;
+              background:rgba(11,15,20,0.8);padding:6px;border-radius:24px;border:1px solid rgba(255,255,255,0.15);backdrop-filter:blur(8px)}
+  #searchForm input{background:transparent;border:none;color:#fff;font-size:15px;padding:6px 16px;width:260px;outline:none}
+  #searchForm input::placeholder{color:rgba(255,255,255,0.4)}
+  #searchForm button{background:#3b82f6;color:#fff;border:none;border-radius:18px;padding:6px 16px;font-size:14px;font-weight:600;cursor:pointer;transition:background 0.2s}
+  #searchForm button:hover{background:#2563eb}
+  @media (max-width:680px){ #hud{left:14px;bottom:16px;font-size:12px} #hud b{font-size:14px} #speed{right:14px;bottom:16px;font-size:12px} #searchForm{top:12px;width:calc(100% - 24px);box-sizing:border-box} #searchForm input{width:100%} }
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
-<div id="hud"><b>Hold SPACE to drive</b><br>auto-steers the route along real streets</div>
+<form id="searchForm">
+  <input type="text" id="searchInput" placeholder="Address, Street, or City..." autocomplete="off">
+  <button type="submit">Go</button>
+</form>
+<canvas id="minimap" width="160" height="160"></canvas>
+<div id="hud"><b>W</b> / <b>S</b> accelerate · brake<br><b>A</b> / <b>D</b> steer left · right<br><b>SPACE</b> handbrake · <b>O</b> free-look</div>
 <div id="speed">0 km/h</div>
-<div id="load">Loading terrain…</div>
+<div id="load">Loading terrain & roads…</div>
 <div id="token">
   <div class="t">Google Maps API key required</div>
   <div class="d">Create a key in <a href="https://console.cloud.google.com/google/maps-apis/credentials" target="_blank" rel="noopener">Google Cloud</a>,

@@ -232,9 +232,9 @@ function main() {
   const _from = new THREE.Vector3();
   const _nmat = new THREE.Matrix3();
   function sampleGround(x, z, currentY) {
-    // If currentY is provided, raycast from 5 meters above the car to climb street obstacles but ignore skyscraper roofs overhead.
-    // If undefined (e.g. during initial spawn), shoot from the sky downward.
-    const originY = currentY !== undefined ? currentY + 5 : 9000;
+    // If currentY is provided, raycast from 50 meters above the car to handle steep hills and LOD pop-ins,
+    // while still ignoring massive skyscraper roofs overhead.
+    const originY = currentY !== undefined ? currentY + 50 : 9000;
     _rc.set(_from.set(x, originY, z), _down);
     _rc.far = 10000;
     const hits = _rc.intersectObject(tiles.group, true);

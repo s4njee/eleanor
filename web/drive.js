@@ -463,6 +463,7 @@ function main() {
       // Query what rendered features are exactly at the car's future location
       const features = mapboxMap.queryRenderedFeatures(screenPt);
       for (let i = 0; i < features.length; i++) {
+        if (!features[i].layer) continue;
         const type = features[i].layer.type;
         const id = (features[i].layer.id || '').toLowerCase();
         

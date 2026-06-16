@@ -366,11 +366,25 @@ function main() {
 
     if (driveReady) return;
     
-    // Use Mapbox terrain elevation for ALL spawns to ensure perfect ground matching
-    const ll = localToGeo(spawnLocal.x, 0, spawnLocal.z, {});
-    const elev = (mapboxMap && mapboxMap.queryTerrainElevation) ? mapboxMap.queryTerrainElevation([ll.lon, ll.lat]) : 0;
-    smoothY = elev || 0;
-    smoothNormal.copy(UP);
+    // ISOLATE MAPBOX:
+    if (window.activeEngine === 'mapbox') {
+      const ll = localToGeo(spawnLocal.x, 0, spawnLocal.z, {});
+      const elev = (mapboxMap && mapboxMap.queryTerrainElevation) ? mapboxMap.queryTerrainElevation([ll.lon, ll.lat]) : 0;
+      smoothY = elev || 0;
+      smoothNormal.copy(UP);
+      carPos.set(spawnLocal.x, smoothY, spawnLocal.z);
+      heading = SPAWN_HEADING;
+      driveReady = true;
+      loadEl.style.opacity = 0;
+      setTimeout(() => (loadEl.style.display = 'none'), 600);
+      return;
+    }
+
+    // GOOGLE:
+    const hit = sampleGround(spawnLocal.x, spawnLocal.z);
+    if (!hit) return; // wait until terrain streams in
+    smoothY = hit.point.y;
+    smoothNormal.copy(faceNormal(hit));
     carPos.set(spawnLocal.x, smoothY, spawnLocal.z);
     heading = SPAWN_HEADING;
     driveReady = true;
@@ -468,20 +482,23 @@ function main() {
           // kill lateral speed component so you don't slide along the wall
           if (speed > 0) speed *= 0.85;
         }
-        // only snap elevation raycast to centerline in Google mode
-        if (window.activeEngine === 'google') {
-          rayX = nearest.x;
-          rayZ = nearest.z;
         }
       }
     }
 
     // --- terrain height ---
-    // Use Mapbox's mathematically pure terrain elevation for BOTH engines to avoid messy photogrammetry raycasts
-    const ll = localToGeo(rayX, 0, rayZ, {});
-    const elev = (mapboxMap && mapboxMap.queryTerrainElevation) ? mapboxMap.queryTerrainElevation([ll.lon, ll.lat]) : 0;
-    smoothY = THREE.MathUtils.lerp(smoothY, elev || 0, 0.25);
-    smoothNormal.lerp(UP, 0.18).normalize();
+    if (window.activeEngine === 'mapbox') {
+      const ll = localToGeo(rayX, 0, rayZ, {});
+      const elev = (mapboxMap && mapboxMap.queryTerrainElevation) ? mapboxMap.queryTerrainElevation([ll.lon, ll.lat]) : 0;
+      smoothY = THREE.MathUtils.lerp(smoothY, elev || 0, 0.25);
+      smoothNormal.lerp(UP, 0.18).normalize();
+    } else {
+      const hit = sampleGround(rayX, rayZ);
+      if (hit) {
+        smoothY = THREE.MathUtils.lerp(smoothY, hit.point.y, 0.25);
+        smoothNormal.lerp(faceNormal(hit), 0.18).normalize();
+      }
+    }
     carPos.y = smoothY + 0.05;
 
     // --- orient car ---

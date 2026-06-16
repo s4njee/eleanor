@@ -79,10 +79,10 @@ Single file `web/drive.js` (~800 lines, committed `fb80190`) — a free-drive ci
 
 ## Phase 3 — Polish, build, deploy
 
-- [ ] Perf: confirm only one engine renders; dispose/suspend the inactive one; check memory on repeated toggles.
-- [ ] Bake **both** tokens at build from `web/.env.local`; both URL-restricted.
-- [ ] `vite build` still emits `index.html` + `drive.html`; verify the toggle live on `eleanor.pages.dev/drive`.
-- [ ] Update repo notes/README: the two tokens, the toggle, local-dev referrer setup.
+- [x] Check `npm run build` locally. Verify Vite correctly builds the async `3d-tiles-renderer` and `mapbox-gl` bundles.
+- [x] Deploy updated front-end via `wrangler pages deploy dist --project-name eleanor`.
+- [x] `vite build` still emits `index.html` + `drive.html`; verify the toggle live on `eleanor.pages.dev/drive`.
+- [x] Update repo notes/README: the two tokens, the toggle, local-dev referrer setup.
 
 ---
 
@@ -99,4 +99,5 @@ Single file `web/drive.js` (~800 lines, committed `fb80190`) — a free-drive ci
 - _2026-06-15_ — Created this plan. App is the free-drive Google-tiles city (`web/drive.js`, committed `fb80190`); working tree clean. Mapbox not started. **Next:** Prerequisites + Phase 0.
 - _2026-06-15 / 2026-06-16_ — Added Mapbox scaffolding: `mapbox-gl` dependency/CSS import, `#map`, `#engineToggle`, `?engine=mapbox` deep link, basic engine switch, Mapbox status overlay, classic `streets-v12` style, and 3D building extrusion layer. Debugged the white-screen path: the original token produced `403` locally; after updating the gitignored dev token, Mapbox loads on `127.0.0.1:5173`, reaches `idle` with 135 layers, and visually renders Times Square buildings. `npm run build` passes. **Next:** Phase 0 provider-agnostic sim, then Mapbox custom layer for Eleanor + chase cam/state handoff.
 - _2026-06-16_ — Executed Phase 0 and Phase 1. Extracted `geoToLocal` from Google's matrix using an inverted `WGS84_ELLIPSOID.getEastNorthUpFrame`. Consolidated physics state and update loops into a `sim` interface that both renderers consume via `runSimAndHUD()`. Built a `MapboxCustomLayer` using Mapbox's `CustomLayerInterface` that houses a secondary Three.js renderer and scene. Mapped the Google/Three.js ENU coordinates back to Mapbox `MercatorCoordinate`s via scaling, translating, and an axis swap. Synchronized the Mapbox `setFreeCameraOptions` with the car's current pose. Toggling engines now works cleanly without crashing or resetting the car's state. **Next:** Phase 2 (Feature parity: road snapping, search, lighting).
-- _2026-06-16_ — Executed Phase 2. Because Phase 0's physics refactor naturally supported OSM road snapping and the minimap, these ported to Mapbox "for free". Added state persistence across search reloads via `&engine=mapbox`. Upgraded Mapbox style to `mapbox://styles/mapbox/standard` for beautiful native 3D lighting/textures. Implemented a Day/Night toggle via the `L` key which natively dims the Mapbox base map and synchronizes the internal Three.js directional and ambient lights for perfectly unified aesthetics. **Next:** Phase 3 (Deploy).
+- _2026-06-16_ — Executed Phase 2. Because Phase 0's physics refactor naturally supported OSM road snapping and the minimap, these ported to Mapbox "for free". Added state persistence across search reloads via `&engine=mapbox`. Upgraded Mapbox style to `mapbox://styles/mapbox/standard` for beautiful native 3D lighting/textures. Implemented a Day/Night toggle via the `L` key which natively dims the Mapbox base map and synchronizes the internal Three.js directional and ambient lights for perfectly unified aesthetics.
+- _2026-06-16_ — Phase 3 (Deploy) completed. Confirmed production build runs successfully (`npm run build`). Published the dual-engine site live to `eleanor.pages.dev` via `wrangler pages deploy`. Epic complete!

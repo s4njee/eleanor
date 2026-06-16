@@ -702,6 +702,9 @@ function main() {
 
         // Clone the car model for Mapbox scene so we can position it independently
         this.mapboxCar = carGroup.clone(true);
+        this.mapboxCar.traverse(child => {
+          child.frustumCulled = false;
+        });
         this.scene.add(this.mapboxCar);
 
         // Cache destination wheel references for syncing each frame
@@ -778,11 +781,11 @@ function main() {
   function updateMapboxChaseCam(state) {
     if (!mapboxMap) return;
     
-    // Camera position: behind and above the car
+    // Use same offset math as Google mode
     const camLatLon = localToGeo(
-      state.x + Math.sin(state.heading) * -CHASE_BACK,
+      state.x + Math.sin(state.heading) * CHASE_BACK,
       state.y,
-      state.z + Math.cos(state.heading) * -CHASE_BACK,
+      state.z + Math.cos(state.heading) * CHASE_BACK,
       {}
     );
     // Look-at target: the car itself

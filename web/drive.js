@@ -477,7 +477,7 @@ function main() {
     // --- road constraint ---
     // Clamp the car to the nearest OSM road dynamically based on street width
     let rayX = carPos.x, rayZ = carPos.z;
-    if (activeVehicle === 'car' && roadGrid) {
+    if (activeVehicle === 'car' && roadGrid && window.activeEngine === 'mapbox') {
       const nearest = roadGrid.nearest(carPos.x, carPos.z);
       if (nearest.dist < 100) {            // only constrain when a road is nearby
         const maxDist = nearest.width || ROAD_HALF_WIDTH;

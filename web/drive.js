@@ -275,7 +275,12 @@ function main() {
         geoToLocal(lat, lon, 0, v);
         if (i > 0) {
           const isMajor = road.name && /^(motorway|trunk|primary|secondary|tertiary)$/.test(road.highway);
-          roadGrid.addSegment(prevX, prevZ, v.x, v.z, isMajor ? road.name : undefined);
+          let width = 8; // default residential width
+          if (road.highway === 'motorway') width = 18;
+          else if (road.highway === 'trunk' || road.highway === 'primary') width = 16;
+          else if (road.highway === 'secondary') width = 12;
+          else if (road.highway === 'tertiary') width = 10;
+          roadGrid.addSegment(prevX, prevZ, v.x, v.z, isMajor ? road.name : undefined, width);
           segCount++;
           if (roadPath2D) {
             roadPath2D.moveTo(prevX, prevZ);
@@ -451,65 +456,33 @@ function main() {
       heading += turnRate * dt;
     }
 
-    // --- move position (with Mapbox collision detection) ---
-    const nextX = carPos.x + speed * Math.sin(heading) * dt;
-    const nextZ = carPos.z + speed * Math.cos(heading) * dt;
-
-    let hitObstacle = false;
-    if (window.activeEngine === 'mapbox' && typeof mapboxMap !== 'undefined' && mapboxMap && Math.abs(speed) > 0.1) {
-      // Cast a "feeler" 3 meters in front of the car's center
-      const LOOKAHEAD = speed > 0 ? 3.0 : -3.0;
-      const checkX = carPos.x + (speed * dt + LOOKAHEAD) * Math.sin(heading);
-      const checkZ = carPos.z + (speed * dt + LOOKAHEAD) * Math.cos(heading);
-      
-      const checkGeo = localToGeo(checkX, 0, checkZ, {});
-      const screenPt = mapboxMap.project([checkGeo.lon, checkGeo.lat]);
-      
-      // Query what rendered features are exactly at the feeler location
-      const features = mapboxMap.queryRenderedFeatures(screenPt);
-      for (let i = 0; i < features.length; i++) {
-        if (!features[i].layer) continue;
-        const type = features[i].layer.type;
-        const id = (features[i].layer.id || '').toLowerCase();
-        
-        // Block if the feature is a 3D building, 3D model, or water body
-        if (type === 'fill-extrusion' || type === 'model' || id.includes('water') || id.includes('building')) {
-          hitObstacle = true;
-          break;
-        }
-      }
-    }
-
-    if (hitObstacle) {
-      // Bounce the car backward and kill speed
-      speed = -speed * 0.4;
-    } else {
-      carPos.x = nextX;
-      carPos.z = nextZ;
-    }
+    // --- move position ---
+    carPos.x += speed * Math.sin(heading) * dt;
+    carPos.z += speed * Math.cos(heading) * dt;
 
     // --- road constraint ---
-    // Clamp the car to the nearest OSM road and raycast at the road's
-    // centerline position so the height comes from the road surface,
-    // not building roofs or photogrammetry clutter.
+    // Clamp the car to the nearest OSM road dynamically based on street width
     let rayX = carPos.x, rayZ = carPos.z;
-    if (roadGrid && window.activeEngine === 'google') {
+    if (roadGrid) {
       const nearest = roadGrid.nearest(carPos.x, carPos.z);
       if (nearest.dist < 100) {            // only constrain when a road is nearby
-        if (nearest.dist > ROAD_HALF_WIDTH) {
+        const maxDist = nearest.width || ROAD_HALF_WIDTH;
+        if (nearest.dist > maxDist) {
           // push car back to road edge
           const dx = carPos.x - nearest.x;
           const dz = carPos.z - nearest.z;
           const d = Math.max(nearest.dist, 1e-6);
-          carPos.x = nearest.x + (dx / d) * ROAD_HALF_WIDTH;
-          carPos.z = nearest.z + (dz / d) * ROAD_HALF_WIDTH;
+          carPos.x = nearest.x + (dx / d) * maxDist;
+          carPos.z = nearest.z + (dz / d) * maxDist;
 
           // kill lateral speed component so you don't slide along the wall
-          if (speed > 0) speed *= 0.92;
+          if (speed > 0) speed *= 0.85;
         }
-        // raycast at the road centerline, not the car position
-        rayX = nearest.x;
-        rayZ = nearest.z;
+        // only snap elevation raycast to centerline in Google mode
+        if (window.activeEngine === 'google') {
+          rayX = nearest.x;
+          rayZ = nearest.z;
+        }
       }
     }
 
@@ -1043,13 +1016,13 @@ class RoadGrid {
 
   _key(cx, cz) { return (cx * 73856093) ^ (cz * 19349663); }   // int hash — faster than string concat
 
-  addSegment(ax, az, bx, bz, name) {
+  addSegment(ax, az, bx, bz, name, width) {
     const cs = this.cellSize;
     const minCx = Math.floor(Math.min(ax, bx) / cs);
     const maxCx = Math.floor(Math.max(ax, bx) / cs);
     const minCz = Math.floor(Math.min(az, bz) / cs);
     const maxCz = Math.floor(Math.max(az, bz) / cs);
-    const seg = { ax, az, bx, bz, name };
+    const seg = { ax, az, bx, bz, name, width };
     for (let cx = minCx; cx <= maxCx; cx++) {
       for (let cz = minCz; cz <= maxCz; cz++) {
         const k = this._key(cx, cz);
@@ -1087,7 +1060,7 @@ class RoadGrid {
   nearest(x, z) {
     const cs = this.cellSize;
     const cx0 = Math.floor(x / cs), cz0 = Math.floor(z / cs);
-    let bestDist = Infinity, bestX = x, bestZ = z;
+    let bestDist = Infinity, bestX = x, bestZ = z, bestWidth = 6;
     for (let dx = -1; dx <= 1; dx++) {
       for (let dz = -1; dz <= 1; dz++) {
         const k = this._key(cx0 + dx, cz0 + dz);
@@ -1096,11 +1069,11 @@ class RoadGrid {
         for (let i = 0; i < bucket.length; i++) {
           const s = bucket[i];
           const [px, pz, d] = projectOnSegment(x, z, s.ax, s.az, s.bx, s.bz);
-          if (d < bestDist) { bestDist = d; bestX = px; bestZ = pz; }
+          if (d < bestDist) { bestDist = d; bestX = px; bestZ = pz; bestWidth = s.width || 6; }
         }
       }
     }
-    return { x: bestX, z: bestZ, dist: bestDist };
+    return { x: bestX, z: bestZ, dist: bestDist, width: bestWidth };
   }
 
   absoluteNearest(x, z) {

@@ -789,7 +789,7 @@ function main() {
       center: [state.lon, state.lat],
       bearing: mapboxBearing,
       pitch: 75,
-      zoom: 19.5
+      zoom: 21.5
     });
   }
 

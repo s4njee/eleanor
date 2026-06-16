@@ -17,7 +17,7 @@ const spawnName = params.get('name') || 'Times Square';
 const INITIAL_ENGINE = params.get('engine') === 'mapbox' ? 'mapbox' : 'google';
 
 const SPAWN = { lat: spawnLat, lon: spawnLon };
-const SPAWN_HEADING = Math.PI;   // radians, 0 = +Z, PI = -Z (south)
+let SPAWN_HEADING = Math.PI;   // radians, 0 = +Z, PI = -Z (south)
 
 // car / driving tuning
 const WHEEL_RADIUS = 0.325, SPIN_SIGN = -1;
@@ -352,6 +352,8 @@ function main() {
         if (nearest.dist !== Infinity) {
           spawnLocal.x = nearest.x;
           spawnLocal.z = nearest.z;
+          // Align car to road
+          SPAWN_HEADING = Math.atan2(nearest.dx, nearest.dz);
         }
       }
       spawnSnapped = true;
@@ -1068,15 +1070,15 @@ class RoadGrid {
   }
 
   absoluteNearest(x, z) {
-    let bestDist = Infinity, bestX = x, bestZ = z;
+    let bestDist = Infinity, bestX = x, bestZ = z, bestDx = 0, bestDz = -1;
     for (const bucket of this.cells.values()) {
       for (let i = 0; i < bucket.length; i++) {
         const s = bucket[i];
-        const [px, pz, d] = projectOnSegment(x, z, s.ax, s.az, s.bx, s.bz);
-        if (d < bestDist) { bestDist = d; bestX = px; bestZ = pz; }
+        const [px, pz, d, rdx, rdz] = projectOnSegment(x, z, s.ax, s.az, s.bx, s.bz);
+        if (d < bestDist) { bestDist = d; bestX = px; bestZ = pz; bestDx = rdx; bestDz = rdz; }
       }
     }
-    return { x: bestX, z: bestZ, dist: bestDist };
+    return { x: bestX, z: bestZ, dist: bestDist, dx: bestDx, dz: bestDz };
   }
 }
 
@@ -1085,12 +1087,14 @@ function projectOnSegment(px, pz, ax, az, bx, bz) {
   const len2 = dx * dx + dz * dz;
   if (len2 < 1e-8) {
     const d = Math.hypot(px - ax, pz - az);
-    return [ax, az, d];
+    return [ax, az, d, 0, -1];
   }
   let t = ((px - ax) * dx + (pz - az) * dz) / len2;
   t = Math.max(0, Math.min(1, t));
   const projX = ax + t * dx, projZ = az + t * dz;
-  return [projX, projZ, Math.hypot(px - projX, pz - projZ)];
+  // normalize dx, dz for the segment direction
+  const len = Math.sqrt(len2);
+  return [projX, projZ, Math.hypot(px - projX, pz - projZ), dx / len, dz / len];
 }
 
 // ---- helpers (module scope) ---------------------------------------------

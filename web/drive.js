@@ -368,21 +368,24 @@ function main() {
     }
 
     if (driveReady) return;
-    const hit = sampleGround(spawnLocal.x, spawnLocal.z);
-    if (!hit) {
-      if (window.activeEngine === 'mapbox') {
-        const ll = localToGeo(spawnLocal.x, 0, spawnLocal.z, {});
-        const elev = (mapboxMap && mapboxMap.queryTerrainElevation) ? mapboxMap.queryTerrainElevation([ll.lon, ll.lat]) : 0;
-        smoothY = elev || 0;
-        smoothNormal.copy(UP);
-        carPos.set(spawnLocal.x, smoothY, spawnLocal.z);
-        heading = SPAWN_HEADING;
-        driveReady = true;
-        loadEl.style.opacity = 0;
-        setTimeout(() => (loadEl.style.display = 'none'), 600);
-      }
-      return;   // wait until terrain has streamed in near the start
+    
+    // Strictly isolate elevation spawn logic
+    if (window.activeEngine === 'mapbox') {
+      const ll = localToGeo(spawnLocal.x, 0, spawnLocal.z, {});
+      const elev = (mapboxMap && mapboxMap.queryTerrainElevation) ? mapboxMap.queryTerrainElevation([ll.lon, ll.lat]) : 0;
+      smoothY = elev || 0;
+      smoothNormal.copy(UP);
+      carPos.set(spawnLocal.x, smoothY, spawnLocal.z);
+      heading = SPAWN_HEADING;
+      driveReady = true;
+      loadEl.style.opacity = 0;
+      setTimeout(() => (loadEl.style.display = 'none'), 600);
+      return;
     }
+
+    // Google mode: drop from sky to find physical ground
+    const hit = sampleGround(spawnLocal.x, spawnLocal.z);
+    if (!hit) return; // wait until terrain streams in
     smoothY = hit.point.y;
     smoothNormal.copy(faceNormal(hit));
     carPos.set(spawnLocal.x, smoothY, spawnLocal.z);

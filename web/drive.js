@@ -451,9 +451,36 @@ function main() {
       heading += turnRate * dt;
     }
 
-    // --- move position ---
-    carPos.x += speed * Math.sin(heading) * dt;
-    carPos.z += speed * Math.cos(heading) * dt;
+    // --- move position (with Mapbox collision detection) ---
+    const nextX = carPos.x + speed * Math.sin(heading) * dt;
+    const nextZ = carPos.z + speed * Math.cos(heading) * dt;
+
+    let hitObstacle = false;
+    if (window.activeEngine === 'mapbox' && typeof mapboxMap !== 'undefined' && mapboxMap && Math.abs(speed) > 0.1) {
+      const nextGeo = localToGeo(nextX, 0, nextZ, {});
+      const screenPt = mapboxMap.project([nextGeo.lon, nextGeo.lat]);
+      
+      // Query what rendered features are exactly at the car's future location
+      const features = mapboxMap.queryRenderedFeatures(screenPt);
+      for (let i = 0; i < features.length; i++) {
+        const type = features[i].layer.type;
+        const id = (features[i].layer.id || '').toLowerCase();
+        
+        // Block if the feature is a 3D building, 3D model, or water body
+        if (type === 'fill-extrusion' || type === 'model' || id.includes('water')) {
+          hitObstacle = true;
+          break;
+        }
+      }
+    }
+
+    if (hitObstacle) {
+      // Bounce the car backward and kill speed
+      speed = -speed * 0.4;
+    } else {
+      carPos.x = nextX;
+      carPos.z = nextZ;
+    }
 
     // --- road constraint ---
     // Clamp the car to the nearest OSM road and raycast at the road's
@@ -635,6 +662,7 @@ function main() {
       addMapboxCarLayer();
       setMapboxStatus('loaded', `${style.layers ? style.layers.length : 0} layers`);
       console.log('mapbox loaded:', style.layers ? style.layers.length : 0, 'layers');
+      window.mapboxMap = mapboxMap;
     });
     mapboxMap.on('idle', () => {
       updateMapboxStatus('idle');

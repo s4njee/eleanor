@@ -347,8 +347,22 @@ function main() {
       spawnSnapped = true;
     }
 
+    if (driveReady) return;
     const hit = sampleGround(spawnLocal.x, spawnLocal.z);
-    if (!hit) return;   // wait until terrain has streamed in near the start
+    if (!hit) {
+      if (window.activeEngine === 'mapbox') {
+        const ll = localToGeo(spawnLocal.x, 0, spawnLocal.z, {});
+        const elev = (mapboxMap && mapboxMap.queryTerrainElevation) ? mapboxMap.queryTerrainElevation([ll.lon, ll.lat]) : 0;
+        smoothY = elev || 0;
+        smoothNormal.copy(UP);
+        carPos.set(spawnLocal.x, smoothY, spawnLocal.z);
+        heading = SPAWN_HEADING;
+        driveReady = true;
+        loadEl.style.opacity = 0;
+        setTimeout(() => (loadEl.style.display = 'none'), 600);
+      }
+      return;   // wait until terrain has streamed in near the start
+    }
     smoothY = hit.point.y;
     smoothNormal.copy(faceNormal(hit));
     carPos.set(spawnLocal.x, smoothY, spawnLocal.z);
@@ -459,6 +473,11 @@ function main() {
     if (hit) {
       smoothY = THREE.MathUtils.lerp(smoothY, hit.point.y, 0.25);
       smoothNormal.lerp(faceNormal(hit), 0.18).normalize();
+    } else if (window.activeEngine === 'mapbox') {
+      const ll = localToGeo(rayX, 0, rayZ, {});
+      const elev = (mapboxMap && mapboxMap.queryTerrainElevation) ? mapboxMap.queryTerrainElevation([ll.lon, ll.lat]) : 0;
+      smoothY = THREE.MathUtils.lerp(smoothY, elev || 0, 0.25);
+      smoothNormal.lerp(UP, 0.18).normalize();
     }
     carPos.y = smoothY + 0.05;
 
@@ -687,7 +706,7 @@ function main() {
         }
 
         const state = sim.getState();
-        const carMerc = mapboxgl.MercatorCoordinate.fromLngLat([state.lon, state.lat], 0);
+        const carMerc = mapboxgl.MercatorCoordinate.fromLngLat([state.lon, state.lat], state.y);
         const meterScale = carMerc.meterInMercatorCoordinateUnits();
 
         // Matrix mapping Local ENU to Mapbox Mercator
@@ -748,7 +767,7 @@ function main() {
     );
     
     mapboxMap.setFreeCameraOptions({
-      position: mapboxgl.MercatorCoordinate.fromLngLat([fwdLatLon.lon, fwdLatLon.lat], CHASE_UP),
+      position: mapboxgl.MercatorCoordinate.fromLngLat([fwdLatLon.lon, fwdLatLon.lat], state.y + CHASE_UP),
       lookAtPoint: [lookLatLon.lon, lookLatLon.lat]
     });
   }

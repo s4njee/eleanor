@@ -69,13 +69,13 @@ Single file `web/drive.js` (~800 lines, committed `fb80190`) — a free-drive ci
 - [x] **Mapbox attribution** stays visible (built into the map; not hidden).
 - [x] Verify on localhost / 127.0.0.1 with dev Mapbox token: Mapbox reaches `idle`, overlay hides, Times Square vector map + extruded buildings are visible.
 
-## Phase 2 — Feature parity in Mapbox mode
+## Phase 2 — Feature parity (the "it just works" milestone)
 
-- [ ] OSM road-snapping active in Mapbox mode (reuse `RoadGrid` via the shared ENU frame).
-- [ ] Minimap renders in both modes (driven by `sim` + `RoadGrid`).
-- [ ] Search/spawn works in both; carry the active engine across the Nominatim reload (e.g. `?engine=mapbox`).
-- [ ] Lighting/look tuned per engine; optional day/night for Mapbox Standard.
-- [ ] HUD (`#speed`, controls hint) consistent across modes.
+- [x] OSM road-snapping active in Mapbox mode (reuse `RoadGrid` via the shared ENU frame).
+- [x] Minimap renders in both modes (driven by `sim` + `RoadGrid`).
+- [x] Search/spawn works in both; carry the active engine across the Nominatim reload (e.g. `?engine=mapbox`).
+- [x] Lighting/look tuned per engine; optional day/night for Mapbox Standard.
+- [x] HUD (`#speed`, controls hint) consistent across modes.
 
 ## Phase 3 — Polish, build, deploy
 
@@ -99,3 +99,4 @@ Single file `web/drive.js` (~800 lines, committed `fb80190`) — a free-drive ci
 - _2026-06-15_ — Created this plan. App is the free-drive Google-tiles city (`web/drive.js`, committed `fb80190`); working tree clean. Mapbox not started. **Next:** Prerequisites + Phase 0.
 - _2026-06-15 / 2026-06-16_ — Added Mapbox scaffolding: `mapbox-gl` dependency/CSS import, `#map`, `#engineToggle`, `?engine=mapbox` deep link, basic engine switch, Mapbox status overlay, classic `streets-v12` style, and 3D building extrusion layer. Debugged the white-screen path: the original token produced `403` locally; after updating the gitignored dev token, Mapbox loads on `127.0.0.1:5173`, reaches `idle` with 135 layers, and visually renders Times Square buildings. `npm run build` passes. **Next:** Phase 0 provider-agnostic sim, then Mapbox custom layer for Eleanor + chase cam/state handoff.
 - _2026-06-16_ — Executed Phase 0 and Phase 1. Extracted `geoToLocal` from Google's matrix using an inverted `WGS84_ELLIPSOID.getEastNorthUpFrame`. Consolidated physics state and update loops into a `sim` interface that both renderers consume via `runSimAndHUD()`. Built a `MapboxCustomLayer` using Mapbox's `CustomLayerInterface` that houses a secondary Three.js renderer and scene. Mapped the Google/Three.js ENU coordinates back to Mapbox `MercatorCoordinate`s via scaling, translating, and an axis swap. Synchronized the Mapbox `setFreeCameraOptions` with the car's current pose. Toggling engines now works cleanly without crashing or resetting the car's state. **Next:** Phase 2 (Feature parity: road snapping, search, lighting).
+- _2026-06-16_ — Executed Phase 2. Because Phase 0's physics refactor naturally supported OSM road snapping and the minimap, these ported to Mapbox "for free". Added state persistence across search reloads via `&engine=mapbox`. Upgraded Mapbox style to `mapbox://styles/mapbox/standard` for beautiful native 3D lighting/textures. Implemented a Day/Night toggle via the `L` key which natively dims the Mapbox base map and synchronizes the internal Three.js directional and ambient lights for perfectly unified aesthetics. **Next:** Phase 3 (Deploy).

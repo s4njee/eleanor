@@ -71,8 +71,8 @@ if (searchForm && searchInput) {
       const data = await res.json();
       if (data && data.length > 0) {
         const loc = data[0];
-        // Use the user's exact query for the display name instead of truncating the API response
-        window.location.href = `?lat=${loc.lat}&lon=${loc.lon}&name=${encodeURIComponent(q)}`;
+        const engParam = window.activeEngine === 'mapbox' ? '&engine=mapbox' : '';
+        window.location.href = `?lat=${loc.lat}&lon=${loc.lon}&name=${encodeURIComponent(q)}${engParam}`;
       } else {
         alert("City not found.");
         btn.textContent = 'Go';
@@ -296,6 +296,14 @@ function main() {
     keys[e.code] = true;
     if (e.code === 'Space') e.preventDefault();
     if (e.code === 'KeyO') controls.enabled = !controls.enabled;
+    if (e.code === 'KeyL' && window.activeEngine === 'mapbox') {
+      if (mapboxMap) {
+        const isNight = mapboxMap.getConfigProperty('basemap', 'lightPreset') === 'night';
+        const nextMode = isNight ? 'day' : 'night';
+        mapboxMap.setConfigProperty('basemap', 'lightPreset', nextMode);
+        window.mapboxNightMode = !isNight;
+      }
+    }
     if (e.code === 'KeyR') { // reset to spawn
       const spawnTest = new THREE.Vector3();
       geoToLocal(SPAWN.lat, SPAWN.lon, 0, spawnTest);
@@ -563,7 +571,7 @@ function main() {
     mapboxgl.accessToken = MAPBOX_TOKEN;
     mapboxMap = new mapboxgl.Map({
       container: mapEl,
-      style: 'mapbox://styles/mapbox/streets-v12',
+      style: 'mapbox://styles/mapbox/standard',
       center: [SPAWN.lon, SPAWN.lat],
       zoom: 16.5, pitch: 62, bearing: 180, antialias: true
     });
@@ -609,6 +617,10 @@ function main() {
   function addMapboxBuildings() {
     if (!mapboxMap || mapboxMap.getLayer('eleanor-3d-buildings')) return;
     const style = mapboxMap.getStyle();
+    
+    // Mapbox Standard v3 natively includes 3D buildings; do not inject manual extrusions
+    if (style.name && style.name.toLowerCase().includes('standard')) return;
+    
     const labelLayer = style.layers && style.layers.find(layer =>
       layer.type === 'symbol' &&
       layer.layout &&
@@ -639,7 +651,110 @@ function main() {
     }, labelLayer && labelLayer.id);
   }
 
+  function addMapboxCarLayer() {
+    if (!mapboxMap || mapboxMap.getLayer('eleanor-car')) return;
+    
+    const customLayer = {
+      id: 'eleanor-car',
+      type: 'custom',
+      renderingMode: '3d',
+      onAdd: function(map, gl) {
+        this.camera = new THREE.Camera();
+        this.scene = new THREE.Scene();
+        this.map = map;
+
+        this.directionalLight = new THREE.DirectionalLight(0xffffff, 1.5);
+        this.directionalLight.position.set(0, 100, 0); // Straight down
+        this.scene.add(this.directionalLight);
+
+        this.ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+        this.scene.add(this.ambientLight);
+
+        // Mapbox renderer instance
+        this.renderer = new THREE.WebGLRenderer({
+          canvas: map.getCanvas(),
+          context: gl,
+          antialias: true
+        });
+        this.renderer.autoClear = false;
+      },
+      render: function(gl, matrix) {
+        if (window.activeEngine !== 'mapbox') return;
+        
+        // ensure carGroup is in our Mapbox scene
+        if (carGroup.parent !== this.scene) {
+          this.scene.add(carGroup);
+        }
+
+        const state = sim.getState();
+        const carMerc = mapboxgl.MercatorCoordinate.fromLngLat([state.lon, state.lat], 0);
+        const meterScale = carMerc.meterInMercatorCoordinateUnits();
+
+        // Matrix mapping Local ENU to Mapbox Mercator
+        const l = new THREE.Matrix4();
+        l.makeTranslation(carMerc.x, carMerc.y, carMerc.z);
+        l.multiply(new THREE.Matrix4().makeScale(meterScale, meterScale, meterScale));
+        
+        // Swap Y and Z axes to map ENU (X=East, Y=Up, Z=South) to Mapbox (X=East, Y=South, Z=Up)
+        const yzSwap = new THREE.Matrix4().set(
+          1, 0, 0, 0,
+          0, 0, 1, 0,
+          0, 1, 0, 0,
+          0, 0, 0, 1
+        );
+        l.multiply(yzSwap);
+        
+        // Shift local origin to the car's current position so local transforms apply correctly
+        l.multiply(new THREE.Matrix4().makeTranslation(-state.x, -state.y, -state.z));
+
+        const m = new THREE.Matrix4().fromArray(matrix);
+        this.camera.projectionMatrix = m.multiply(l);
+        
+        // Sync Three.js lighting to Mapbox day/night cycle
+        if (window.mapboxNightMode) {
+          this.directionalLight.intensity = 0.0;
+          this.ambientLight.intensity = 0.15;
+        } else {
+          this.directionalLight.intensity = 1.5;
+          this.ambientLight.intensity = 0.4;
+        }
+        
+        this.renderer.resetState();
+        this.renderer.render(this.scene, this.camera);
+        
+        // Chase cam updates in Mapbox mode
+        updateMapboxChaseCam(state);
+        
+        this.map.triggerRepaint();
+      }
+    };
+    
+    mapboxMap.addLayer(customLayer);
+  }
+
+  function updateMapboxChaseCam(state) {
+    if (!mapboxMap) return;
+    const fwdLatLon = localToGeo(
+      state.x + Math.sin(state.heading) * -CHASE_BACK,
+      0,
+      state.z + Math.cos(state.heading) * -CHASE_BACK,
+      {}
+    );
+    const lookLatLon = localToGeo(
+      state.x,
+      0,
+      state.z,
+      {}
+    );
+    
+    mapboxMap.setFreeCameraOptions({
+      position: mapboxgl.MercatorCoordinate.fromLngLat([fwdLatLon.lon, fwdLatLon.lat], CHASE_UP),
+      lookAtPoint: [lookLatLon.lon, lookLatLon.lat]
+    });
+  }
+
   function setEngine(name) {
+    window.activeEngine = name;
     if (name === 'mapbox' && !MAPBOX_TOKEN) {
       engine = name;
       mapEl.style.display = 'block';

@@ -562,9 +562,14 @@ function main() {
     const lerpRate = activeVehicle === 'plane' ? CHASE_LERP * 10 : CHASE_LERP;
     const k = 1 - Math.exp(-lerpRate * dt);
     
-    camera.position.x = THREE.MathUtils.lerp(camera.position.x, _camGoal.x, k);
-    camera.position.z = THREE.MathUtils.lerp(camera.position.z, _camGoal.z, k);
-    camera.position.y = _camGoal.y;
+    if (activeVehicle === 'plane') {
+      camera.position.copy(_camGoal);
+    } else {
+      camera.position.x = THREE.MathUtils.lerp(camera.position.x, _camGoal.x, k);
+      camera.position.z = THREE.MathUtils.lerp(camera.position.z, _camGoal.z, k);
+      camera.position.y = _camGoal.y;
+    }
+    
     _look.copy(carPos).addScaledVector(UP, LOOK_H);
     camera.lookAt(_look);
   }

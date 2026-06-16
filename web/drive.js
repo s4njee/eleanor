@@ -460,7 +460,7 @@ function main() {
     // centerline position so the height comes from the road surface,
     // not building roofs or photogrammetry clutter.
     let rayX = carPos.x, rayZ = carPos.z;
-    if (roadGrid) {
+    if (roadGrid && window.activeEngine === 'google') {
       const nearest = roadGrid.nearest(carPos.x, carPos.z);
       if (nearest.dist < 100) {            // only constrain when a road is nearby
         if (nearest.dist > ROAD_HALF_WIDTH) {

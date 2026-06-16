@@ -457,10 +457,15 @@ function main() {
 
     let hitObstacle = false;
     if (window.activeEngine === 'mapbox' && typeof mapboxMap !== 'undefined' && mapboxMap && Math.abs(speed) > 0.1) {
-      const nextGeo = localToGeo(nextX, 0, nextZ, {});
-      const screenPt = mapboxMap.project([nextGeo.lon, nextGeo.lat]);
+      // Cast a "feeler" 3 meters in front of the car's center
+      const LOOKAHEAD = speed > 0 ? 3.0 : -3.0;
+      const checkX = carPos.x + (speed * dt + LOOKAHEAD) * Math.sin(heading);
+      const checkZ = carPos.z + (speed * dt + LOOKAHEAD) * Math.cos(heading);
       
-      // Query what rendered features are exactly at the car's future location
+      const checkGeo = localToGeo(checkX, 0, checkZ, {});
+      const screenPt = mapboxMap.project([checkGeo.lon, checkGeo.lat]);
+      
+      // Query what rendered features are exactly at the feeler location
       const features = mapboxMap.queryRenderedFeatures(screenPt);
       for (let i = 0; i < features.length; i++) {
         if (!features[i].layer) continue;
@@ -468,7 +473,7 @@ function main() {
         const id = (features[i].layer.id || '').toLowerCase();
         
         // Block if the feature is a 3D building, 3D model, or water body
-        if (type === 'fill-extrusion' || type === 'model' || id.includes('water')) {
+        if (type === 'fill-extrusion' || type === 'model' || id.includes('water') || id.includes('building')) {
           hitObstacle = true;
           break;
         }

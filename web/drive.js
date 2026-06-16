@@ -841,7 +841,7 @@ function main() {
     if (forceVehicle && activeVehicle === forceVehicle) return;
     activeVehicle = activeVehicle === 'car' ? 'plane' : 'car';
     const vehicleToggleBtn = document.getElementById('vehicleToggle');
-    if (vehicleToggleBtn) vehicleToggleBtn.textContent = activeVehicle === 'car' ? 'Car' : 'Plane';
+    if (vehicleToggleBtn) vehicleToggleBtn.textContent = activeVehicle === 'car' ? 'Eleanor' : 'SR-71';
     carGroup.visible = activeVehicle === 'car';
     planeGroup.visible = activeVehicle === 'plane';
   }

@@ -826,11 +826,14 @@ function main() {
     // Our simulation heading is 0 when facing +Z (South).
     const mapboxBearing = 180 - THREE.MathUtils.radToDeg(state.heading);
     
+    const targetZoom = activeVehicle === 'plane' ? 14.0 : 19.5;
+    const targetPitch = activeVehicle === 'plane' ? 50 : 75;
+    
     mapboxMap.jumpTo({
       center: [state.lon, state.lat],
       bearing: mapboxBearing,
-      pitch: 75,
-      zoom: 19.5
+      pitch: targetPitch,
+      zoom: targetZoom
     });
   }
 

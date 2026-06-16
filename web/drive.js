@@ -554,8 +554,10 @@ function main() {
   // ---- chase cam --------------------------------------------------------
   const _camGoal = new THREE.Vector3(), _look = new THREE.Vector3(), _camFwd = new THREE.Vector3();
   function updateChase(dt) {
+    const back = activeVehicle === 'plane' ? CHASE_BACK * 0.5 : CHASE_BACK;
+    const up = activeVehicle === 'plane' ? CHASE_UP * 0.5 : CHASE_UP;
     _camFwd.set(Math.sin(heading), 0, Math.cos(heading)).normalize();
-    _camGoal.copy(carPos).addScaledVector(_camFwd, -CHASE_BACK).addScaledVector(UP, CHASE_UP);
+    _camGoal.copy(carPos).addScaledVector(_camFwd, -back).addScaledVector(UP, up);
     const k = 1 - Math.exp(-CHASE_LERP * dt);
     camera.position.x = THREE.MathUtils.lerp(camera.position.x, _camGoal.x, k);
     camera.position.z = THREE.MathUtils.lerp(camera.position.z, _camGoal.z, k);
@@ -1170,6 +1172,7 @@ function loadPlane(planeGroup, done) {
   gltfLoader.setDRACOLoader(draco);
   gltfLoader.load(sr71Glb, (gltf) => {
     const root = gltf.scene;
+    root.rotation.y = -Math.PI / 2; // Fix sideways rotation
     planeGroup.add(root);
     planeGroup.updateWorldMatrix(true, true);
     const box = new THREE.Box3().setFromObject(root);

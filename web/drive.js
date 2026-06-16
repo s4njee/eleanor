@@ -781,24 +781,16 @@ function main() {
   function updateMapboxChaseCam(state) {
     if (!mapboxMap) return;
     
-    // Use same offset math as Google mode
-    const camLatLon = localToGeo(
-      state.x + Math.sin(state.heading) * CHASE_BACK,
-      state.y,
-      state.z + Math.cos(state.heading) * CHASE_BACK,
-      {}
-    );
-    // Look-at target: the car itself
-    const lookLatLon = localToGeo(state.x, state.y, state.z, {});
+    // Mapbox bearing is degrees clockwise from North (0=North, 90=East, 180=South)
+    // Our simulation heading is 0 when facing +Z (South).
+    const mapboxBearing = 180 - THREE.MathUtils.radToDeg(state.heading);
     
-    // Use the proper FreeCameraOptions API
-    const camera = mapboxMap.getFreeCameraOptions();
-    camera.position = mapboxgl.MercatorCoordinate.fromLngLat(
-      [camLatLon.lon, camLatLon.lat], 
-      state.y + CHASE_UP
-    );
-    camera.lookAtPoint([lookLatLon.lon, lookLatLon.lat]);
-    mapboxMap.setFreeCameraOptions(camera);
+    mapboxMap.jumpTo({
+      center: [state.lon, state.lat],
+      bearing: mapboxBearing,
+      pitch: 75,
+      zoom: 19.5
+    });
   }
 
   function setEngine(name) {

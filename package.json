@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "3d-tiles-renderer": "^0.4.28",
+    "mapbox-gl": "^3.24.1",
     "three": "^0.184.0"
   }
 }

@@ -291,10 +291,11 @@ function main() {
 
   // ---- input ------------------------------------------------------------
   const keys = {};
+  const DRIVING_KEYS = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'KeyW', 'KeyA', 'KeyS', 'KeyD'];
   addEventListener('keydown', e => {
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
     keys[e.code] = true;
-    if (e.code === 'Space') e.preventDefault();
+    if (DRIVING_KEYS.includes(e.code)) e.preventDefault();
     if (e.code === 'KeyO') controls.enabled = !controls.enabled;
     if (e.code === 'KeyL' && window.activeEngine === 'mapbox') {
       if (mapboxMap) {
@@ -323,7 +324,7 @@ function main() {
   addEventListener('keyup', e => {
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
     keys[e.code] = false;
-    if (e.code === 'Space') e.preventDefault();
+    if (DRIVING_KEYS.includes(e.code)) e.preventDefault();
   });
   addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
 
@@ -595,6 +596,13 @@ function main() {
       zoom: 16.5, pitch: 62, bearing: 180, antialias: true,
       interactive: false   // disable all mouse/touch/keyboard — we control the camera
     });
+    mapboxMap.scrollZoom.disable();
+    mapboxMap.boxZoom.disable();
+    mapboxMap.dragPan.disable();
+    mapboxMap.dragRotate.disable();
+    mapboxMap.keyboard.disable();
+    mapboxMap.doubleClickZoom.disable();
+    mapboxMap.touchZoomRotate.disable();
     const updateMapboxStatus = (status = 'loading') => {
       try {
         const style = mapboxMap.getStyle();
@@ -720,7 +728,7 @@ function main() {
         }
 
         const state = sim.getState();
-        const merc = mapboxgl.MercatorCoordinate.fromLngLat([state.lon, state.lat], 0);
+        const merc = mapboxgl.MercatorCoordinate.fromLngLat([state.lon, state.lat], state.y);
         const scale = merc.meterInMercatorCoordinateUnits();
 
         // Standard Mapbox model matrix:
@@ -764,18 +772,18 @@ function main() {
     // Camera position: behind and above the car
     const camLatLon = localToGeo(
       state.x + Math.sin(state.heading) * -CHASE_BACK,
-      0,
+      state.y,
       state.z + Math.cos(state.heading) * -CHASE_BACK,
       {}
     );
     // Look-at target: the car itself
-    const lookLatLon = localToGeo(state.x, 0, state.z, {});
+    const lookLatLon = localToGeo(state.x, state.y, state.z, {});
     
     // Use the proper FreeCameraOptions API
     const camera = mapboxMap.getFreeCameraOptions();
     camera.position = mapboxgl.MercatorCoordinate.fromLngLat(
       [camLatLon.lon, camLatLon.lat], 
-      CHASE_UP
+      state.y + CHASE_UP
     );
     camera.lookAtPoint([lookLatLon.lon, lookLatLon.lat]);
     mapboxMap.setFreeCameraOptions(camera);

@@ -480,8 +480,8 @@ function main() {
     if (activeVehicle === 'car' && roadGrid && window.activeEngine === 'mapbox') {
       const nearest = roadGrid.nearest(carPos.x, carPos.z);
       if (nearest.dist < 100) {            // only constrain when a road is nearby
-        const maxDist = nearest.width || ROAD_HALF_WIDTH;
-        if (nearest.dist > maxDist) {
+        if (!nearest.inBounds) {
+          const maxDist = nearest.width || ROAD_HALF_WIDTH;
           // push car back to road edge
           const dx = carPos.x - nearest.x;
           const dz = carPos.z - nearest.z;
@@ -1116,6 +1116,7 @@ class RoadGrid {
     const cs = this.cellSize;
     const cx0 = Math.floor(x / cs), cz0 = Math.floor(z / cs);
     let bestDist = Infinity, bestX = x, bestZ = z, bestWidth = 6;
+    let inBounds = false;
     for (let dx = -1; dx <= 1; dx++) {
       for (let dz = -1; dz <= 1; dz++) {
         const k = this._key(cx0 + dx, cz0 + dz);
@@ -1124,11 +1125,13 @@ class RoadGrid {
         for (let i = 0; i < bucket.length; i++) {
           const s = bucket[i];
           const [px, pz, d] = projectOnSegment(x, z, s.ax, s.az, s.bx, s.bz);
-          if (d < bestDist) { bestDist = d; bestX = px; bestZ = pz; bestWidth = s.width || 6; }
+          const maxD = s.width || 6;
+          if (d <= maxD) inBounds = true;
+          if (d < bestDist) { bestDist = d; bestX = px; bestZ = pz; bestWidth = maxD; }
         }
       }
     }
-    return { x: bestX, z: bestZ, dist: bestDist, width: bestWidth };
+    return { dist: bestDist, x: bestX, z: bestZ, width: bestWidth, inBounds };
   }
 
   absoluteNearest(x, z) {

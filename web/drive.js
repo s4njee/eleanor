@@ -592,7 +592,8 @@ function main() {
       container: mapEl,
       style: 'mapbox://styles/mapbox/standard',
       center: [SPAWN.lon, SPAWN.lat],
-      zoom: 16.5, pitch: 62, bearing: 180, antialias: true
+      zoom: 16.5, pitch: 62, bearing: 180, antialias: true,
+      interactive: false   // disable all mouse/touch/keyboard — we control the camera
     });
     const updateMapboxStatus = (status = 'loading') => {
       try {
@@ -686,6 +687,12 @@ function main() {
         this.mapboxCar = carGroup.clone(true);
         this.scene.add(this.mapboxCar);
 
+        // Cache destination wheel references for syncing each frame
+        this.dstWheels = [];
+        this.mapboxCar.traverse(o => {
+          if (o.name && o.name.startsWith('Wheel_') && o.name.endsWith('_ctrl')) this.dstWheels.push(o);
+        });
+
         this.directionalLight = new THREE.DirectionalLight(0xffffff, 1.5);
         this.directionalLight.position.set(0, 70, 50);
         this.scene.add(this.directionalLight);
@@ -703,21 +710,13 @@ function main() {
       render: function(gl, matrix) {
         if (window.activeEngine !== 'mapbox' || !driveReady) return;
 
-        // Copy the car's visual state (wheel spin, body orientation) from the main carGroup
-        this.mapboxCar.quaternion.identity();
+        // Copy the exact orientation and wheel state from the physics carGroup
         this.mapboxCar.position.set(0, 0, 0);
+        this.mapboxCar.quaternion.copy(carGroup.quaternion);
 
-        // Apply heading rotation: car faces -Z in Three.js, heading 0 = +Z in our sim
-        // So rotate by heading around Y axis
-        this.mapboxCar.rotation.set(0, -heading, 0);
-
-        // Copy wheel rotations from the original
-        const srcWheels = [];
-        carGroup.traverse(o => { if (o.name && o.name.startsWith('Wheel_') && o.name.endsWith('_ctrl')) srcWheels.push(o); });
-        const dstWheels = [];
-        this.mapboxCar.traverse(o => { if (o.name && o.name.startsWith('Wheel_') && o.name.endsWith('_ctrl')) dstWheels.push(o); });
-        for (let i = 0; i < Math.min(srcWheels.length, dstWheels.length); i++) {
-          dstWheels[i].rotation.copy(srcWheels[i].rotation);
+        // Copy wheel rotations
+        for (let i = 0; i < Math.min(wheels.length, this.dstWheels.length); i++) {
+          this.dstWheels[i].rotation.copy(wheels[i].rotation);
         }
 
         const state = sim.getState();

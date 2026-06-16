@@ -478,11 +478,6 @@ function main() {
           // kill lateral speed component so you don't slide along the wall
           if (speed > 0) speed *= 0.85;
         }
-        // only snap elevation raycast to centerline in Google mode
-        if (window.activeEngine === 'google') {
-          rayX = nearest.x;
-          rayZ = nearest.z;
-        }
       }
     }
 

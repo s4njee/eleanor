@@ -6,12 +6,15 @@ import { TilesRenderer, WGS84_ELLIPSOID } from '3d-tiles-renderer/three';
 import { ReorientationPlugin } from '3d-tiles-renderer/three/plugins';
 import { GoogleCloudAuthPlugin } from '3d-tiles-renderer/core/plugins';
 import eleanorGlb from './eleanor.glb?url';
+import mapboxgl from 'mapbox-gl';
+import 'mapbox-gl/dist/mapbox-gl.css';
 
 // ---- dynamic config via URL ---------------------------------------------
 const params = new URLSearchParams(location.search);
 const spawnLat = parseFloat(params.get('lat')) || 40.75800;
 const spawnLon = parseFloat(params.get('lon')) || -73.98551;
 const spawnName = params.get('name') || 'Times Square';
+const INITIAL_ENGINE = params.get('engine') === 'mapbox' ? 'mapbox' : 'google';
 
 const SPAWN = { lat: spawnLat, lon: spawnLon };
 const SPAWN_HEADING = Math.PI;   // radians, 0 = +Z, PI = -Z (south)
@@ -84,7 +87,8 @@ if (searchForm && searchInput) {
 // ---- Google Maps API key gate -------------------------------------------
 const ENV_KEY = import.meta.env ? import.meta.env.VITE_GOOGLE_MAPS_KEY : undefined;
 const GOOGLE_KEY = ENV_KEY || localStorage.getItem('GOOGLE_MAPS_KEY') || '';
-if (!GOOGLE_KEY) {
+const MAPBOX_TOKEN = (import.meta.env ? import.meta.env.VITE_MAPBOX_TOKEN : undefined) || localStorage.getItem('MAPBOX_TOKEN') || '';
+if (!GOOGLE_KEY && INITIAL_ENGINE !== 'mapbox') {
   loadEl.style.display = 'none';
   const t = document.getElementById('token');
   t.style.display = 'flex';
@@ -182,9 +186,23 @@ function main() {
 
   // ---- geo -> local scene frame -----------------------------------------
   const _ecef = new THREE.Vector3();
+  const _baseFrame = new THREE.Matrix4();
+  const _baseFrameInverse = new THREE.Matrix4();
+  WGS84_ELLIPSOID.getEastNorthUpFrame(deg2rad(SPAWN.lat), deg2rad(SPAWN.lon), 0, _baseFrame);
+  _baseFrameInverse.copy(_baseFrame).invert();
+
   function geoToLocal(latDeg, lonDeg, height, target) {
     WGS84_ELLIPSOID.getCartographicToPosition(deg2rad(latDeg), deg2rad(lonDeg), height || 0, _ecef);
-    return target.copy(_ecef).applyMatrix4(tiles.group.matrixWorld);
+    return target.copy(_ecef).applyMatrix4(_baseFrameInverse);
+  }
+
+  function localToGeo(x, y, z, target) {
+    _ecef.set(x, y, z).applyMatrix4(_baseFrame);
+    WGS84_ELLIPSOID.getPositionToCartographic(_ecef, target);
+    target.lat = THREE.MathUtils.radToDeg(target.lat);
+    target.lon = THREE.MathUtils.radToDeg(target.lon);
+    target.height = target.height || 0;
+    return target;
   }
 
   // ---- car --------------------------------------------------------------
@@ -233,13 +251,7 @@ function main() {
   });
 
   function tryBuildRoads() {
-    if (roadsReady || !roadsData || !tilesReady) return;
-    tiles.group.updateMatrixWorld(true);
-
-    // verify geoToLocal is settled
-    const test = new THREE.Vector3();
-    geoToLocal(SPAWN.lat, SPAWN.lon, 0, test);
-    if (!isFinite(test.length()) || test.length() > 1e5) return;
+    if (roadsReady || !roadsData) return;
 
     // convert all road polylines to local XZ and build the spatial grid
     roadGrid = new RoadGrid(ROAD_GRID_CELL);
@@ -286,7 +298,6 @@ function main() {
     if (e.code === 'KeyO') controls.enabled = !controls.enabled;
     if (e.code === 'KeyR') { // reset to spawn
       const spawnTest = new THREE.Vector3();
-      tiles.group.updateMatrixWorld(true);
       geoToLocal(SPAWN.lat, SPAWN.lon, 0, spawnTest);
       if (roadGrid && roadGrid.cellCount > 0) {
         const nearest = roadGrid.absoluteNearest(spawnTest.x, spawnTest.z);
@@ -314,12 +325,10 @@ function main() {
   const spawnLocal = new THREE.Vector3();
 
   function tryStart() {
-    if (driveReady || !tilesReady || !carLoaded || !roadsReady) return;
-    tiles.group.updateMatrixWorld(true);
+    if (driveReady || !carLoaded || !roadsReady) return;
 
     if (!spawnSnapped) {
       geoToLocal(SPAWN.lat, SPAWN.lon, 0, spawnLocal);
-      if (!isFinite(spawnLocal.length()) || spawnLocal.length() > 1e5) return;
       if (roadGrid && roadGrid.cellCount > 0) {
         const nearest = roadGrid.absoluteNearest(spawnLocal.x, spawnLocal.z);
         if (nearest.dist !== Infinity) {
@@ -490,29 +499,194 @@ function main() {
     camera.lookAt(_look);
   }
 
+  // ---- sim interface ----------------------------------------------------
+  const sim = {
+    getState: () => {
+      const geo = localToGeo(carPos.x, carPos.y, carPos.z, {});
+      return {
+        x: carPos.x,
+        y: carPos.y,
+        z: carPos.z,
+        lat: geo.lat,
+        lon: geo.lon,
+        heading: heading,
+        speed: speed,
+        steerAngle: steerAngle
+      };
+    },
+    update: (dt) => {
+      updateCar(dt);
+    }
+  };
+
+  // ---- engine toggle (Google photoreal tiles ⇄ Mapbox vector) -----------
+  // Phase 1 scaffolding: Mapbox renders the clean city in its own GL context;
+  // the Three.js loop pauses while it's active. (Car + shared sim come next.)
+  let engine = 'google';
+  let mapboxMap = null;
+  let mapboxFatalError = false;
+  const mapEl = document.getElementById('map');
+  const mapStatusEl = document.getElementById('mapStatus');
+  const mapStatusTitle = document.getElementById('mapStatusTitle');
+  const mapStatusDetail = document.getElementById('mapStatusDetail');
+  const toggleBtn = document.getElementById('engineToggle');
+
+  function showMapboxNotice(title, detail) {
+    if (!mapStatusEl) return;
+    if (mapStatusTitle) mapStatusTitle.textContent = title;
+    if (mapStatusDetail) mapStatusDetail.textContent = detail;
+    mapStatusEl.style.display = 'flex';
+  }
+
+  function hideMapboxNotice() {
+    if (mapStatusEl) mapStatusEl.style.display = 'none';
+  }
+
+  function setMapboxStatus(status, detail = '') {
+    if (!mapEl) return;
+    mapEl.dataset.mapboxStatus = status;
+    mapEl.dataset.mapboxDetail = detail;
+    if (status === 'initializing' || status === 'loading' || status === 'styledata' || status === 'sourcedata') {
+      showMapboxNotice('Loading Mapbox', detail || 'Fetching map style and tiles...');
+    } else if (status === 'loaded' || status === 'idle' || status === 'style-loaded') {
+      if (mapboxFatalError) return;
+      hideMapboxNotice();
+    } else if (status === 'error') {
+      showMapboxNotice('Mapbox could not load', detail || 'Check the Mapbox token and allowed domains.');
+    }
+  }
+
+  function initMapbox() {
+    if (mapboxMap || !MAPBOX_TOKEN) return;
+    mapboxFatalError = false;
+    setMapboxStatus('initializing');
+    mapboxgl.accessToken = MAPBOX_TOKEN;
+    mapboxMap = new mapboxgl.Map({
+      container: mapEl,
+      style: 'mapbox://styles/mapbox/streets-v12',
+      center: [SPAWN.lon, SPAWN.lat],
+      zoom: 16.5, pitch: 62, bearing: 180, antialias: true
+    });
+    const updateMapboxStatus = (status = 'loading') => {
+      try {
+        const style = mapboxMap.getStyle();
+        const layers = style && style.layers ? style.layers.length : 0;
+        const sources = style && style.sources ? Object.keys(style.sources).length : 0;
+        setMapboxStatus(
+          mapboxMap.isStyleLoaded() ? 'style-loaded' : status,
+          `${layers} layers, ${sources} sources, loaded=${mapboxMap.loaded()}`
+        );
+      } catch (err) {
+        setMapboxStatus(status, err && err.message ? err.message : String(err));
+      }
+    };
+    mapboxMap.on('styledata', () => updateMapboxStatus('styledata'));
+    mapboxMap.on('sourcedata', () => updateMapboxStatus('sourcedata'));
+    mapboxMap.on('load', () => {
+      const style = mapboxMap.getStyle();
+      addMapboxBuildings();
+      addMapboxCarLayer();
+      setMapboxStatus('loaded', `${style.layers ? style.layers.length : 0} layers`);
+      console.log('mapbox loaded:', style.layers ? style.layers.length : 0, 'layers');
+    });
+    mapboxMap.on('idle', () => {
+      updateMapboxStatus('idle');
+      mapEl.dataset.mapboxStatus = 'idle';
+    });
+    mapboxMap.on('error', e => {
+      const x = (e && e.error) || e || {};
+      let msg = x.message || x.statusText || x.type || 'unknown error';
+      if (x.status === 401 || x.status === 403) {
+        mapboxFatalError = true;
+        msg = `Mapbox rejected this token for ${location.origin}. Add this origin to the token URL restrictions or use an unrestricted development token.`;
+      }
+      const safeUrl = x.url ? String(x.url).replace(/(access_token=)[^&\s]+/g, '$1[redacted]') : '';
+      setMapboxStatus('error', `${x.status || ''} ${msg}`.trim());
+      console.warn('mapbox error:', x.name || (x.constructor && x.constructor.name) || x.type, '| status', x.status, '| url', safeUrl, '| msg', msg);
+    });
+  }
+
+  function addMapboxBuildings() {
+    if (!mapboxMap || mapboxMap.getLayer('eleanor-3d-buildings')) return;
+    const style = mapboxMap.getStyle();
+    const labelLayer = style.layers && style.layers.find(layer =>
+      layer.type === 'symbol' &&
+      layer.layout &&
+      layer.layout['text-field']
+    );
+    if (!style.sources || !style.sources.composite) return;
+    mapboxMap.addLayer({
+      id: 'eleanor-3d-buildings',
+      source: 'composite',
+      'source-layer': 'building',
+      filter: ['==', ['get', 'extrude'], 'true'],
+      type: 'fill-extrusion',
+      minzoom: 15,
+      paint: {
+        'fill-extrusion-color': '#b8c1cc',
+        'fill-extrusion-height': [
+          'interpolate', ['linear'], ['zoom'],
+          15, 0,
+          15.05, ['coalesce', ['get', 'height'], 0]
+        ],
+        'fill-extrusion-base': [
+          'interpolate', ['linear'], ['zoom'],
+          15, 0,
+          15.05, ['coalesce', ['get', 'min_height'], 0]
+        ],
+        'fill-extrusion-opacity': 0.72
+      }
+    }, labelLayer && labelLayer.id);
+  }
+
+  function setEngine(name) {
+    if (name === 'mapbox' && !MAPBOX_TOKEN) {
+      engine = name;
+      mapEl.style.display = 'block';
+      renderer.domElement.style.display = 'none';
+      loadEl.style.display = 'none';
+      showMapboxNotice('Mapbox token required', 'Add VITE_MAPBOX_TOKEN to web/.env.local or store MAPBOX_TOKEN in localStorage.');
+      if (toggleBtn) toggleBtn.textContent = 'Google';
+      return;
+    }
+    engine = name;
+    if (name === 'mapbox') {
+      mapEl.style.display = 'block';
+      renderer.domElement.style.display = 'none';
+      loadEl.style.display = 'none';
+      initMapbox();
+      if (mapboxMap) mapboxMap.resize();
+      if (mapboxFatalError) {
+        showMapboxNotice('Mapbox could not load', mapEl.dataset.mapboxDetail || 'Check the Mapbox token and allowed domains.');
+      }
+      if (toggleBtn) toggleBtn.textContent = 'Google';
+    } else {
+      mapEl.style.display = 'none';
+      hideMapboxNotice();
+      renderer.domElement.style.display = 'block';
+      if (!GOOGLE_KEY) {
+        document.getElementById('token').style.display = 'flex';
+      } else if (!driveReady) {
+        loadEl.style.display = 'flex'; loadEl.style.opacity = '1';
+      }
+      if (toggleBtn) toggleBtn.textContent = 'Mapbox';
+    }
+  }
+  if (toggleBtn) toggleBtn.addEventListener('click', () => setEngine(engine === 'google' ? 'mapbox' : 'google'));
+  if (INITIAL_ENGINE === 'mapbox') setEngine('mapbox');   // deep-link straight into Mapbox mode
+
   // ---- loop -------------------------------------------------------------
   const clock = new THREE.Clock();
-  function tick() {
-    const dt = Math.min(clock.getDelta(), 0.05);
 
+  function runSimAndHUD(dt) {
     tryBuildRoads();
     tryStart();
 
     if (driveReady) {
-      updateCar(dt);
-      if (!controls.enabled) updateChase(dt);
+      sim.update(dt);
       speedEl.textContent = Math.round(Math.abs(speed) * 3.6) + ' km/h';
-    } else if (controls.enabled) {
-      controls.update();
     }
 
-    camera.updateMatrixWorld();
-    tiles.setResolutionFromRenderer(camera, renderer);
-    tiles.update();
-    updateAttribution();
-
-    renderer.render(scene, camera);
-    
     // --- render minimap ---
     if (minimapCtx && roadPath2D && driveReady) {
       minimapCtx.clearRect(0, 0, 160, 160);
@@ -538,8 +712,6 @@ function main() {
       minimapCtx.textAlign = 'center';
       minimapCtx.textBaseline = 'middle';
       
-      const mapRot = heading + Math.PI;
-      
       // Localized street names
       if (roadGrid) {
         const visibleNames = new Map();
@@ -561,6 +733,12 @@ function main() {
         for (const [name, label] of visibleNames.entries()) {
           minimapCtx.save();
           minimapCtx.translate(label.x, label.z);
+          
+          let textAngle = label.angle;
+          const globalAngle = heading + Math.PI + textAngle;
+          if (Math.cos(globalAngle) < 0) {
+            textAngle += Math.PI;
+          }
           
           let absRot = mapRot + label.angle;
           absRot = (absRot % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2);
@@ -588,10 +766,31 @@ function main() {
       minimapCtx.lineTo(75, 84);
       minimapCtx.fill();
     }
-
-    requestAnimationFrame(tick);
   }
-  tick();
+
+  function tick() {
+    requestAnimationFrame(tick);
+    if (engine !== 'google') return;   // Mapbox renders itself
+    
+    const dt = Math.min(clock.getDelta(), 0.05);
+    runSimAndHUD(dt);
+
+    if (carGroup.parent !== scene) scene.add(carGroup);
+
+    if (driveReady) {
+      if (!controls.enabled) updateChase(dt);
+    } else if (controls.enabled) {
+      controls.update();
+    }
+
+    camera.updateMatrixWorld();
+    tiles.setResolutionFromRenderer(camera, renderer);
+    tiles.update();
+    updateAttribution();
+
+    renderer.render(scene, camera);
+  }
+  requestAnimationFrame(tick);
 
   addEventListener('resize', () => {
     camera.aspect = innerWidth / innerHeight;

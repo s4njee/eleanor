@@ -499,18 +499,20 @@ function main() {
     if (window.activeEngine === 'mapbox') {
       const ll = localToGeo(rayX, 0, rayZ, {});
       const elev = (mapboxMap && mapboxMap.queryTerrainElevation) ? mapboxMap.queryTerrainElevation([ll.lon, ll.lat]) : 0;
-      smoothY = THREE.MathUtils.lerp(smoothY, elev || 0, 0.25);
-      smoothNormal.lerp(UP, 0.18).normalize();
+      if (activeVehicle === 'car') {
+        smoothY = THREE.MathUtils.lerp(smoothY, elev || 0, 0.25);
+        smoothNormal.lerp(UP, 0.18).normalize();
+      }
     } else {
       const hit = sampleGround(rayX, rayZ);
-      if (hit) {
+      if (hit && activeVehicle === 'car') {
         smoothY = THREE.MathUtils.lerp(smoothY, hit.point.y, 0.25);
         smoothNormal.lerp(faceNormal(hit), 0.18).normalize();
       }
     }
     
     if (activeVehicle === 'plane') {
-      carPos.y = smoothY + 150; // Fly 150m above ground
+      carPos.y = smoothY + 800; // Fly high enough to clear skyscrapers
       smoothNormal.copy(UP); // Always stay upright
     } else {
       carPos.y = smoothY + 0.05;

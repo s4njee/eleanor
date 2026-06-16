@@ -481,8 +481,9 @@ function main() {
       }
     }
 
-    // --- terrain height (raycasted at road position) ---
-    const hit = sampleGround(rayX, rayZ);
+    // --- terrain height ---
+    // Strictly separate elevation logic so Mapbox doesn't hit invisible Google meshes
+    const hit = window.activeEngine === 'google' ? sampleGround(rayX, rayZ) : null;
     if (hit) {
       smoothY = THREE.MathUtils.lerp(smoothY, hit.point.y, 0.25);
       smoothNormal.lerp(faceNormal(hit), 0.18).normalize();

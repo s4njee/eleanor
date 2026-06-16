@@ -868,12 +868,7 @@ function main() {
           minimapCtx.save();
           minimapCtx.translate(label.x, label.z);
           
-          let textAngle = label.angle;
-          const globalAngle = heading + Math.PI + textAngle;
-          if (Math.cos(globalAngle) < 0) {
-            textAngle += Math.PI;
-          }
-          
+          const mapRot = heading + Math.PI;
           let absRot = mapRot + label.angle;
           absRot = (absRot % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2);
           let flip = (absRot > Math.PI / 2 && absRot < Math.PI * 1.5);
@@ -904,25 +899,29 @@ function main() {
 
   function tick() {
     requestAnimationFrame(tick);
-    if (engine !== 'google') return;   // Mapbox renders itself
-    
     const dt = Math.min(clock.getDelta(), 0.05);
+
+    // Always run physics + HUD regardless of active engine
     runSimAndHUD(dt);
 
-    if (carGroup.parent !== scene) scene.add(carGroup);
+    if (engine === 'google') {
+      // Google-specific rendering
+      if (carGroup.parent !== scene) scene.add(carGroup);
 
-    if (driveReady) {
-      if (!controls.enabled) updateChase(dt);
-    } else if (controls.enabled) {
-      controls.update();
+      if (driveReady) {
+        if (!controls.enabled) updateChase(dt);
+      } else if (controls.enabled) {
+        controls.update();
+      }
+
+      camera.updateMatrixWorld();
+      tiles.setResolutionFromRenderer(camera, renderer);
+      tiles.update();
+      updateAttribution();
+
+      renderer.render(scene, camera);
     }
-
-    camera.updateMatrixWorld();
-    tiles.setResolutionFromRenderer(camera, renderer);
-    tiles.update();
-    updateAttribution();
-
-    renderer.render(scene, camera);
+    // Mapbox renders via its own custom layer render() callback
   }
   requestAnimationFrame(tick);
 

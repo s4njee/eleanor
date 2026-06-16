@@ -231,8 +231,11 @@ function main() {
   const _down = new THREE.Vector3(0, -1, 0);
   const _from = new THREE.Vector3();
   const _nmat = new THREE.Matrix3();
-  function sampleGround(x, z) {
-    _rc.set(_from.set(x, 9000, z), _down);
+  function sampleGround(x, z, currentY) {
+    // If currentY is provided, raycast from 5 meters above the car to climb street obstacles but ignore skyscraper roofs overhead.
+    // If undefined (e.g. during initial spawn), shoot from the sky downward.
+    const originY = currentY !== undefined ? currentY + 5 : 9000;
+    _rc.set(_from.set(x, originY, z), _down);
     _rc.far = 10000;
     const hits = _rc.intersectObject(tiles.group, true);
     return hits.length ? hits[0] : null;
@@ -483,7 +486,7 @@ function main() {
 
     // --- terrain height ---
     // Strictly separate elevation logic so Mapbox doesn't hit invisible Google meshes
-    const hit = window.activeEngine === 'google' ? sampleGround(rayX, rayZ) : null;
+    const hit = window.activeEngine === 'google' ? sampleGround(rayX, rayZ, carPos.y) : null;
     if (hit) {
       smoothY = THREE.MathUtils.lerp(smoothY, hit.point.y, 0.25);
       smoothNormal.lerp(faceNormal(hit), 0.18).normalize();

@@ -1,10 +1,11 @@
 import * as THREE from 'three';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TilesRenderer, WGS84_ELLIPSOID } from '3d-tiles-renderer/three';
 import { ReorientationPlugin } from '3d-tiles-renderer/three/plugins';
 import { GoogleCloudAuthPlugin } from '3d-tiles-renderer/core/plugins';
+import eleanorGlb from './eleanor.glb?url';
 
 // ---- dynamic config via URL ---------------------------------------------
 const params = new URLSearchParams(location.search);
@@ -746,7 +747,7 @@ function loadCar(carGroup, wheels, bodyMat, done) {
   const draco = new DRACOLoader();
   draco.setDecoderPath('https://www.gstatic.com/draco/v1/decoders/');
   gltfLoader.setDRACOLoader(draco);
-  gltfLoader.load('eleanor.glb', (gltf) => {
+  gltfLoader.load(eleanorGlb, (gltf) => {
     const root = gltf.scene;
     carGroup.add(root);
     carGroup.updateWorldMatrix(true, true);

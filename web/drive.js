@@ -837,8 +837,18 @@ function main() {
     });
   }
 
+  function toggleVehicle(forceVehicle) {
+    if (forceVehicle && activeVehicle === forceVehicle) return;
+    activeVehicle = activeVehicle === 'car' ? 'plane' : 'car';
+    const vehicleToggleBtn = document.getElementById('vehicleToggle');
+    if (vehicleToggleBtn) vehicleToggleBtn.textContent = activeVehicle === 'car' ? 'Car' : 'Plane';
+    carGroup.visible = activeVehicle === 'car';
+    planeGroup.visible = activeVehicle === 'plane';
+  }
+
   function setEngine(name) {
     window.activeEngine = name;
+    const vToggle = document.getElementById('vehicleToggle');
     if (name === 'mapbox' && !MAPBOX_TOKEN) {
       engine = name;
       mapEl.style.display = 'block';
@@ -846,6 +856,8 @@ function main() {
       loadEl.style.display = 'none';
       showMapboxNotice('Mapbox token required', 'Add VITE_MAPBOX_TOKEN to web/.env.local or store MAPBOX_TOKEN in localStorage.');
       if (toggleBtn) toggleBtn.textContent = 'Google';
+      if (vToggle) vToggle.style.display = 'none';
+      toggleVehicle('car');
       return;
     }
     engine = name;
@@ -859,6 +871,8 @@ function main() {
         showMapboxNotice('Mapbox could not load', mapEl.dataset.mapboxDetail || 'Check the Mapbox token and allowed domains.');
       }
       if (toggleBtn) toggleBtn.textContent = 'Google';
+      if (vToggle) vToggle.style.display = 'none';
+      toggleVehicle('car');
     } else {
       mapEl.style.display = 'none';
       hideMapboxNotice();
@@ -869,18 +883,14 @@ function main() {
         loadEl.style.display = 'flex'; loadEl.style.opacity = '1';
       }
       if (toggleBtn) toggleBtn.textContent = 'Mapbox';
+      if (vToggle) vToggle.style.display = 'block';
     }
   }
   if (toggleBtn) toggleBtn.addEventListener('click', () => setEngine(engine === 'google' ? 'mapbox' : 'google'));
 
   const vehicleToggleBtn = document.getElementById('vehicleToggle');
   if (vehicleToggleBtn) {
-    vehicleToggleBtn.addEventListener('click', () => {
-      activeVehicle = activeVehicle === 'car' ? 'plane' : 'car';
-      vehicleToggleBtn.textContent = activeVehicle === 'car' ? 'Car' : 'Plane';
-      carGroup.visible = activeVehicle === 'car';
-      planeGroup.visible = activeVehicle === 'plane';
-    });
+    vehicleToggleBtn.addEventListener('click', () => toggleVehicle());
   }
   if (INITIAL_ENGINE === 'mapbox') setEngine('mapbox');   // deep-link straight into Mapbox mode
 

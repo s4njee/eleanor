@@ -682,14 +682,17 @@ function main() {
         this.scene = new THREE.Scene();
         this.map = map;
 
+        // Clone the car model for Mapbox scene so we can position it independently
+        this.mapboxCar = carGroup.clone(true);
+        this.scene.add(this.mapboxCar);
+
         this.directionalLight = new THREE.DirectionalLight(0xffffff, 1.5);
-        this.directionalLight.position.set(0, 100, 0); // Straight down
+        this.directionalLight.position.set(0, 70, 50);
         this.scene.add(this.directionalLight);
 
-        this.ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+        this.ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
         this.scene.add(this.ambientLight);
 
-        // Mapbox renderer instance
         this.renderer = new THREE.WebGLRenderer({
           canvas: map.getCanvas(),
           context: gl,
@@ -698,52 +701,57 @@ function main() {
         this.renderer.autoClear = false;
       },
       render: function(gl, matrix) {
-        if (window.activeEngine !== 'mapbox') return;
-        
-        // ensure carGroup is in our Mapbox scene
-        if (carGroup.parent !== this.scene) {
-          this.scene.add(carGroup);
+        if (window.activeEngine !== 'mapbox' || !driveReady) return;
+
+        // Copy the car's visual state (wheel spin, body orientation) from the main carGroup
+        this.mapboxCar.quaternion.identity();
+        this.mapboxCar.position.set(0, 0, 0);
+
+        // Apply heading rotation: car faces -Z in Three.js, heading 0 = +Z in our sim
+        // So rotate by heading around Y axis
+        this.mapboxCar.rotation.set(0, -heading, 0);
+
+        // Copy wheel rotations from the original
+        const srcWheels = [];
+        carGroup.traverse(o => { if (o.name && o.name.startsWith('Wheel_') && o.name.endsWith('_ctrl')) srcWheels.push(o); });
+        const dstWheels = [];
+        this.mapboxCar.traverse(o => { if (o.name && o.name.startsWith('Wheel_') && o.name.endsWith('_ctrl')) dstWheels.push(o); });
+        for (let i = 0; i < Math.min(srcWheels.length, dstWheels.length); i++) {
+          dstWheels[i].rotation.copy(srcWheels[i].rotation);
         }
 
         const state = sim.getState();
-        const carMerc = mapboxgl.MercatorCoordinate.fromLngLat([state.lon, state.lat], state.y);
-        const meterScale = carMerc.meterInMercatorCoordinateUnits();
+        const merc = mapboxgl.MercatorCoordinate.fromLngLat([state.lon, state.lat], 0);
+        const scale = merc.meterInMercatorCoordinateUnits();
 
-        // Matrix mapping Local ENU to Mapbox Mercator
-        const l = new THREE.Matrix4();
-        l.makeTranslation(carMerc.x, carMerc.y, carMerc.z);
-        l.multiply(new THREE.Matrix4().makeScale(meterScale, meterScale, meterScale));
-        
-        // Swap Y and Z axes to map ENU (X=East, Y=Up, Z=South) to Mapbox (X=East, Y=South, Z=Up)
-        const yzSwap = new THREE.Matrix4().set(
-          1, 0, 0, 0,
-          0, 0, 1, 0,
-          0, 1, 0, 0,
-          0, 0, 0, 1
-        );
-        l.multiply(yzSwap);
-        
-        // Shift local origin to the car's current position so local transforms apply correctly
-        l.multiply(new THREE.Matrix4().makeTranslation(-state.x, -state.y, -state.z));
+        // Standard Mapbox model matrix:
+        // 1. Translate to Mercator position
+        // 2. Scale from meters to Mercator units
+        // 3. Rotate from Three.js coords (Y-up) to Mapbox coords (Z-up)
+        //    Three.js: X=right, Y=up, Z=toward-viewer
+        //    Mapbox:   X=east,  Y=south, Z=up
+        //    Rotation: 90° around X axis flips Y↔Z
+        const l = new THREE.Matrix4()
+          .makeTranslation(merc.x, merc.y, merc.z)
+          .scale(new THREE.Vector3(scale, -scale, scale))
+          .multiply(new THREE.Matrix4().makeRotationX(Math.PI / 2));
 
         const m = new THREE.Matrix4().fromArray(matrix);
         this.camera.projectionMatrix = m.multiply(l);
         
-        // Sync Three.js lighting to Mapbox day/night cycle
+        // Sync lighting to day/night
         if (window.mapboxNightMode) {
           this.directionalLight.intensity = 0.0;
           this.ambientLight.intensity = 0.15;
         } else {
           this.directionalLight.intensity = 1.5;
-          this.ambientLight.intensity = 0.4;
+          this.ambientLight.intensity = 0.6;
         }
         
         this.renderer.resetState();
         this.renderer.render(this.scene, this.camera);
         
-        // Chase cam updates in Mapbox mode
         updateMapboxChaseCam(state);
-        
         this.map.triggerRepaint();
       }
     };
@@ -753,23 +761,25 @@ function main() {
 
   function updateMapboxChaseCam(state) {
     if (!mapboxMap) return;
-    const fwdLatLon = localToGeo(
+    
+    // Camera position: behind and above the car
+    const camLatLon = localToGeo(
       state.x + Math.sin(state.heading) * -CHASE_BACK,
       0,
       state.z + Math.cos(state.heading) * -CHASE_BACK,
       {}
     );
-    const lookLatLon = localToGeo(
-      state.x,
-      0,
-      state.z,
-      {}
-    );
+    // Look-at target: the car itself
+    const lookLatLon = localToGeo(state.x, 0, state.z, {});
     
-    mapboxMap.setFreeCameraOptions({
-      position: mapboxgl.MercatorCoordinate.fromLngLat([fwdLatLon.lon, fwdLatLon.lat], state.y + CHASE_UP),
-      lookAtPoint: [lookLatLon.lon, lookLatLon.lat]
-    });
+    // Use the proper FreeCameraOptions API
+    const camera = mapboxMap.getFreeCameraOptions();
+    camera.position = mapboxgl.MercatorCoordinate.fromLngLat(
+      [camLatLon.lon, camLatLon.lat], 
+      CHASE_UP
+    );
+    camera.lookAtPoint([lookLatLon.lon, lookLatLon.lat]);
+    mapboxMap.setFreeCameraOptions(camera);
   }
 
   function setEngine(name) {

@@ -193,11 +193,20 @@ function main() {
 
   function geoToLocal(latDeg, lonDeg, height, target) {
     WGS84_ELLIPSOID.getCartographicToPosition(deg2rad(latDeg), deg2rad(lonDeg), height || 0, _ecef);
-    return target.copy(_ecef).applyMatrix4(_baseFrameInverse);
+    target.copy(_ecef).applyMatrix4(_baseFrameInverse);
+    // target is in ENU: x=East, y=North, z=Up.
+    // Three.js frame: East=x, Up=y, South=z. Therefore South = -North.
+    const e = target.x;
+    const n = target.y;
+    const u = target.z;
+    target.set(e, u, -n);
+    return target;
   }
 
   function localToGeo(x, y, z, target) {
-    _ecef.set(x, y, z).applyMatrix4(_baseFrame);
+    // Input is Three.js frame: x=East, y=Up, z=South.
+    // ENU expects: East=x, North=-z, Up=y.
+    _ecef.set(x, -z, y).applyMatrix4(_baseFrame);
     WGS84_ELLIPSOID.getPositionToCartographic(_ecef, target);
     target.lat = THREE.MathUtils.radToDeg(target.lat);
     target.lon = THREE.MathUtils.radToDeg(target.lon);

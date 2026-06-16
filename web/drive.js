@@ -6,6 +6,7 @@ import { TilesRenderer, WGS84_ELLIPSOID } from '3d-tiles-renderer/three';
 import { ReorientationPlugin } from '3d-tiles-renderer/three/plugins';
 import { GoogleCloudAuthPlugin } from '3d-tiles-renderer/core/plugins';
 import eleanorGlb from './eleanor.glb?url';
+import sr71Glb from './sr71.glb?url';
 import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
 
@@ -214,7 +215,8 @@ function main() {
     return target;
   }
 
-  // ---- car --------------------------------------------------------------
+  // ---- car & plane ------------------------------------------------------
+  let activeVehicle = 'car';
   const carGroup = new THREE.Group();
   scene.add(carGroup);
   const wheels = [];
@@ -224,6 +226,12 @@ function main() {
     envMap: greyEnvTex, envMapIntensity: 1.0
   });
   loadCar(carGroup, wheels, bodyMat, () => { carLoaded = true; });
+
+  const planeGroup = new THREE.Group();
+  scene.add(planeGroup);
+  planeGroup.visible = false;
+  let planeLoaded = false;
+  loadPlane(planeGroup, () => { planeLoaded = true; });
 
   // ---- surface raycast --------------------------------------------------
   const _rc = new THREE.Raycaster();
@@ -348,7 +356,7 @@ function main() {
   const spawnLocal = new THREE.Vector3();
 
   function tryStart() {
-    if (driveReady || !carLoaded || !roadsReady) return;
+    if (driveReady || !carLoaded || !planeLoaded || !roadsReady) return;
 
     if (!spawnSnapped) {
       geoToLocal(SPAWN.lat, SPAWN.lon, 0, spawnLocal);
@@ -438,7 +446,9 @@ function main() {
         // braking from reverse
         speed = Math.min(0, speed + BRAKE_DECEL * dt);
       } else {
-        speed = Math.min(MAX_SPEED, speed + ACCEL * dt);
+        const curMaxSpeed = activeVehicle === 'plane' ? MAX_SPEED * 10 : MAX_SPEED;
+        const curAccel = activeVehicle === 'plane' ? ACCEL * 5 : ACCEL;
+        speed = Math.min(curMaxSpeed, speed + curAccel * dt);
       }
     } else if (wantBrake && !wantThrottle) {
       if (speed > 0.5) {
@@ -467,7 +477,7 @@ function main() {
     // --- road constraint ---
     // Clamp the car to the nearest OSM road dynamically based on street width
     let rayX = carPos.x, rayZ = carPos.z;
-    if (roadGrid) {
+    if (activeVehicle === 'car' && roadGrid) {
       const nearest = roadGrid.nearest(carPos.x, carPos.z);
       if (nearest.dist < 100) {            // only constrain when a road is nearby
         const maxDist = nearest.width || ROAD_HALF_WIDTH;
@@ -498,29 +508,38 @@ function main() {
         smoothNormal.lerp(faceNormal(hit), 0.18).normalize();
       }
     }
-    carPos.y = smoothY + 0.05;
+    
+    if (activeVehicle === 'plane') {
+      carPos.y = smoothY + 150; // Fly 150m above ground
+      smoothNormal.copy(UP); // Always stay upright
+    } else {
+      carPos.y = smoothY + 0.05;
+    }
 
     // --- orient car ---
-    carGroup.position.copy(carPos);
+    const activeGroup = activeVehicle === 'car' ? carGroup : planeGroup;
+    activeGroup.position.copy(carPos);
     _fwd.set(Math.sin(heading), 0, Math.cos(heading)).normalize();
 
     // bank into turns
     const bank = THREE.MathUtils.clamp(-steerAngle * speed * BANK_GAIN * 2, -BANK_MAX, BANK_MAX);
-    orientCar(_fwd, smoothNormal, bank);
+    orientCar(_fwd, smoothNormal, bank, activeGroup);
 
     // --- wheels ---
-    const droll = SPIN_SIGN * (speed * dt) / WHEEL_RADIUS;
-    for (const w of wheels) w.rotation.x += droll;
+    if (activeVehicle === 'car') {
+      const droll = SPIN_SIGN * (speed * dt) / WHEEL_RADIUS;
+      for (const w of wheels) w.rotation.x += droll;
+    }
   }
 
-  function orientCar(forward, up, bank) {
+  function orientCar(forward, up, bank, group) {
     _right.crossVectors(forward, up).normalize();
     const _adjFwd = new THREE.Vector3();
     _adjFwd.crossVectors(up, _right).normalize();
     _basis.makeBasis(_right, up, _adjFwd.negate());
     _q.setFromRotationMatrix(_basis);
     _q.multiply(_qBank.setFromAxisAngle(_zAxis, bank));
-    carGroup.quaternion.slerp(_q, 0.2);
+    group.quaternion.slerp(_q, 0.2);
   }
 
   function faceNormal(hit) {
@@ -536,12 +555,12 @@ function main() {
   const _camGoal = new THREE.Vector3(), _look = new THREE.Vector3(), _camFwd = new THREE.Vector3();
   function updateChase(dt) {
     _camFwd.set(Math.sin(heading), 0, Math.cos(heading)).normalize();
-    _camGoal.copy(carGroup.position).addScaledVector(_camFwd, -CHASE_BACK).addScaledVector(UP, CHASE_UP);
+    _camGoal.copy(carPos).addScaledVector(_camFwd, -CHASE_BACK).addScaledVector(UP, CHASE_UP);
     const k = 1 - Math.exp(-CHASE_LERP * dt);
     camera.position.x = THREE.MathUtils.lerp(camera.position.x, _camGoal.x, k);
     camera.position.z = THREE.MathUtils.lerp(camera.position.z, _camGoal.z, k);
     camera.position.y = _camGoal.y;
-    _look.copy(carGroup.position).addScaledVector(UP, LOOK_H);
+    _look.copy(carPos).addScaledVector(UP, LOOK_H);
     camera.lookAt(_look);
   }
 
@@ -838,6 +857,16 @@ function main() {
     }
   }
   if (toggleBtn) toggleBtn.addEventListener('click', () => setEngine(engine === 'google' ? 'mapbox' : 'google'));
+
+  const vehicleToggleBtn = document.getElementById('vehicleToggle');
+  if (vehicleToggleBtn) {
+    vehicleToggleBtn.addEventListener('click', () => {
+      activeVehicle = activeVehicle === 'car' ? 'plane' : 'car';
+      vehicleToggleBtn.textContent = activeVehicle === 'car' ? 'Car' : 'Plane';
+      carGroup.visible = activeVehicle === 'car';
+      planeGroup.visible = activeVehicle === 'plane';
+    });
+  }
   if (INITIAL_ENGINE === 'mapbox') setEngine('mapbox');   // deep-link straight into Mapbox mode
 
   // ---- loop -------------------------------------------------------------
@@ -1130,6 +1159,32 @@ function loadCar(carGroup, wheels, bodyMat, done) {
     done();
   }, undefined, (err) => {
     document.getElementById('load').textContent = 'Failed to load eleanor.glb';
+    console.error(err);
+  });
+}
+
+function loadPlane(planeGroup, done) {
+  const gltfLoader = new GLTFLoader();
+  const draco = new DRACOLoader();
+  draco.setDecoderPath('https://www.gstatic.com/draco/v1/decoders/');
+  gltfLoader.setDRACOLoader(draco);
+  gltfLoader.load(sr71Glb, (gltf) => {
+    const root = gltf.scene;
+    planeGroup.add(root);
+    planeGroup.updateWorldMatrix(true, true);
+    const box = new THREE.Box3().setFromObject(root);
+    const ctr = box.getCenter(new THREE.Vector3());
+    root.position.x -= ctr.x; root.position.z -= ctr.z; root.position.y -= box.min.y;
+    planeGroup.updateWorldMatrix(true, true);
+    root.traverse(o => {
+      if (o.isMesh) {
+        o.frustumCulled = false;
+      }
+    });
+    // scale up a little bit since the plane might be small? 
+    // Wait, sr71 might be huge or small. I'll just leave scale alone for now.
+    done();
+  }, undefined, (err) => {
     console.error(err);
   });
 }

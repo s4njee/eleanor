@@ -47,6 +47,9 @@
   #engineToggle{position:fixed;top:20px;right:20px;z-index:30;background:rgba(11,15,20,0.8);color:#fff;
     border:1px solid rgba(255,255,255,0.15);border-radius:18px;padding:7px 16px;font-size:14px;font-weight:600;
     cursor:pointer;backdrop-filter:blur(8px)}
+  #vehicleToggle{position:fixed;top:20px;right:110px;z-index:30;background:rgba(11,15,20,0.8);color:#fff;
+    border:1px solid rgba(255,255,255,0.15);border-radius:18px;padding:7px 16px;font-size:14px;font-weight:600;
+    cursor:pointer;backdrop-filter:blur(8px)}
   @media (max-width:680px){ #hud{left:14px;bottom:16px;font-size:12px} #hud b{font-size:14px} #speed{right:14px;bottom:16px;font-size:12px} #searchForm{top:12px;width:calc(100% - 24px);box-sizing:border-box} #searchForm input{width:100%} }
 </style>
 </head>
@@ -55,6 +58,7 @@
 <div id="map"></div>
 <div id="mapStatus"><div class="box"><b id="mapStatusTitle">Mapbox</b><span id="mapStatusDetail">Loading map...</span></div></div>
 <button id="engineToggle">Mapbox</button>
+<button id="vehicleToggle">Car</button>
 <form id="searchForm">
   <input type="text" id="searchInput" placeholder="Address, Street, or City..." autocomplete="off">
   <button type="submit">Go</button>
